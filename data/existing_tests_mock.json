@@ -1,0 +1,6 @@
+{
+  "covered_urls": ["/login", "/products"],
+  "covered_elements": ["login_form", "product_list"],
+  "total_existing_tests": 8,
+  "framework": "playwright"
+}

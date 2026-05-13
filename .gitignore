@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+venv/
+chroma_store/
+screenshots/
+tests/generated/
+node_modules/
+.next/
+dist/
+*.egg-info/
+.claude/
+.vs/
