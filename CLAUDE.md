@@ -141,15 +141,23 @@ Exploratory_Testing_Agent/
 │           ├── ReportPanel.jsx
 │           └── MetricCards.jsx
 │
-├── demo-app/
+├── demo-app/                ← Next.js 14 pages-router, port 3001
 │   ├── package.json
-│   └── src/
-│       ├── App.jsx
-│       └── pages/
-│           ├── Login.jsx
-│           ├── Products.jsx
-│           ├── Cart.jsx
-│           └── Checkout.jsx
+│   ├── next.config.js
+│   ├── postcss.config.js
+│   ├── tailwind.config.js
+│   ├── README.md            ← bug repro guide, ships with the app
+│   ├── BUGS_EXPLAINED_SIMPLE.md
+│   ├── pages/
+│   │   ├── _app.jsx         ← CartProvider + Navigation; BUG-002 lives here
+│   │   ├── _document.jsx
+│   │   ├── index.jsx        ← redirects to /products
+│   │   ├── login.jsx        ← BUG-001
+│   │   ├── products.jsx
+│   │   ├── cart.jsx         ← BUG-003, BUG-005 (partial), BUG-006
+│   │   └── checkout.jsx     ← BUG-004, BUG-005 (partial)
+│   └── styles/
+│       └── globals.css
 │
 ├── data/
 │   ├── simulated_defect_history.csv
@@ -1432,79 +1440,137 @@ curl http://localhost:8000/report
 
 ---
 
-## 10. Demo App — Pre-Planted Bug Implementation Guide
+## 10. Demo App — Pre-Planted Bug Catalogue
 
-Every interactive element in demo-app MUST have a `data-testid` attribute.
+The demo-app at `demo-app/` is a Next.js 14 e-commerce SPA running on port 3001 (pages router, lowercase filenames per Next.js routing convention). It ships **six pre-planted bugs**, distributed across the three personas so each persona class surfaces at least one finding during exploration. Bugs 1–4 carry inline `// BUG-NNN` comments in the source; bugs 5–6 are emergent — present in the same code but never flagged with a comment.
+
+Run with `cd demo-app && npm install && npm run dev` (binds port 3001). `/` redirects to `/products`. Public routes: `/login`, `/products`. Routes that *should* require auth but don't: `/cart`, `/checkout` — see BUG-005.
 
 ### Required `data-testid` attributes
 
-**Login page:**
-- `data-testid="email-input"`
-- `data-testid="password-input"`
-- `data-testid="login-btn"`
-- `data-testid="login-error-msg"` — for validation errors
+These are the selectors the crawler will discover. Extracted from the implemented JSX — keep this list and `demo-app/pages/*.jsx` in sync via §19 sync rules. `{id}` placeholders are product ids `1`–`6`.
 
-**Products page:**
-- `data-testid="product-card"` — on each product card
-- `data-testid="add-to-cart-btn"` — on each card's button
-- `data-testid="cart-count"` — in header
+**Global nav (`pages/_app.jsx`):**
+- `cart-count` — badge in nav header, visible only when cart count > 0
 
-**Cart page:**
-- `data-testid="cart-item"` — on each item row
-- `data-testid="quantity-input"` — on each quantity field
-- `data-testid="subtotal"` — for the subtotal display
-- `data-testid="checkout-btn"`
+**`/login` (`pages/login.jsx`):**
+- `email-input`, `password-input` — form fields
+- `login-button` — submit
+- `error-message` — appears only when `error` state is non-empty
 
-**Checkout page:**
-- `data-testid="card-number"` — payment card field
-- `data-testid="card-expiry"`
-- `data-testid="card-cvv"`
-- `data-testid="card-error-msg"` — for validation errors
-- `data-testid="pay-now-btn"`
+**`/products` (`pages/products.jsx`):**
+- `product-page-cart-count` — wrapper for the "Items in cart: N" banner
+- `cart-count-display` — numeric span inside that banner
+- `product-name-{id}`, `product-price-{id}`, `add-to-cart-btn-{id}` — one set per product
+- `bug-explanation` — human-facing yellow panel; agent should ignore
 
-### Bug Implementation — implement exactly as described
+**`/cart` (`pages/cart.jsx`):**
+- `cart-item-{id}` — row container
+- `item-price-{id}`, `item-total-{id}`, `quantity-input-{id}`, `remove-btn-{id}` — per row
+- `subtotal`, `total-price` — order summary
+- `proceed-to-checkout-btn`
+- `bug-explanation` — human-facing panel
 
-**BUG-001 (Login — /login):**
+**`/checkout` (`pages/checkout.jsx`):**
+- Shipping: `fullname-input`, `email-input`, `address-input`, `city-input`, `state-input`, `zipcode-input`
+- Payment: `card-number-input`, `expiry-input`, `cvv-input`
+- `place-order-btn` — submit
+- `checkout-subtotal`, `checkout-total`, `order-item-{id}` — order summary
+- `bug-explanation` — human-facing panel
+- Per-field validation errors render via `.error-message` class (no specific testid)
+
+### Bug catalogue (six bugs total)
+
+| ID | Page | Severity | Persona | One-line |
+|---|---|---|---|---|
+| BUG-001 | `/login` | HIGH | Confused | Empty password accepted; navigates to `/products` |
+| BUG-002 | `/products`, `/cart`, nav | MEDIUM | Power | Cart count renders `NaN` once any line-item quantity > 5 |
+| BUG-003 | `/cart` | HIGH | Confused / Malicious | Negative quantity accepted; subtotal goes negative |
+| BUG-004 | `/checkout` | HIGH | Malicious / Confused | Card number accepted regardless of format (letters, length) |
+| BUG-005 | `/cart`, `/checkout` | HIGH | Malicious | Protected routes reachable without ever logging in (no auth guard) |
+| BUG-006 | `/cart` | MEDIUM | Confused | Non-numeric text in quantity field silently removes the item |
+
+### Per-bug detail (current implementation snippets)
+
+**BUG-001 — Login form accepts empty password** (`pages/login.jsx` `handleSubmit`)
 ```jsx
-// WRONG (intentional bug): no validation before submit
-const handleLogin = () => {
-  // Missing: if (!password) { setError("Password required"); return; }
-  navigate('/products');  // Always navigates, even with empty password
+// BUG STARTS HERE: No check for empty password
+// A correct implementation would have:
+// if (!password) { setError('Password is required'); setLoading(false); return; }
+localStorage.setItem('userEmail', email);
+setIsLoggedIn(true);
+router.push('/products');
+```
+Trigger: Confused User submits the login form with `email` filled and `password` empty.
+
+**BUG-002 — Cart count NaN once any item quantity > 5** (`pages/_app.jsx` `getCartCount`)
+```jsx
+const getCartCount = () => {
+  let count = 0;
+  for (let item of cartItems) {
+    if (item.quantity > 5) {
+      count = count + (item.quantity * "invalid");   // string * number = NaN
+    } else {
+      count = count + item.quantity;
+    }
+  }
+  return count || 0;
 };
 ```
+Trigger: Power User clicks the same product's Add-to-Cart 6+ times. Both the in-page cart-count badge and the nav header badge render `NaN`. Anomaly: visible incorrect numeric display.
 
-**BUG-002 (Products — /products):**
+**BUG-003 — Negative quantity accepted** (`pages/cart.jsx` `handleQuantityChange`)
 ```jsx
-// WRONG (intentional bug): NaN when count overflows
-const [cartCount, setCartCount] = useState(0);
-const addToCart = (productId) => {
-  const counts = itemCounts;
-  counts[productId] = (counts[productId] || 0) + 1;
-  // Missing: if (counts[productId] > 5) — just let it accumulate
-  setCartCount(Object.values(counts).reduce((a, b) => a + b));
-  // Bug: if any itemCount goes beyond integer safe range, reduce returns NaN
-  // Trigger: add same item > 99 times rapidly (or seed counts with large value)
+const handleQuantityChange = (productId, value) => {
+  const quantity = parseInt(value) || 0;
+  // BUG: Missing validation here
+  // Should check: if (quantity < 0) { showError; return; }
+  updateQuantity(productId, quantity);
 };
 ```
+Trigger: Confused / Malicious User enters `-5` in any `quantity-input-{id}`. `item-total-{id}` becomes negative; `subtotal` and `total-price` become negative.
 
-**BUG-003 (Cart — /cart):**
+**BUG-004 — Card number format not validated** (`pages/checkout.jsx` `validateForm`)
 ```jsx
-// WRONG (intentional bug): accepts negative quantity
-const handleQuantityChange = (itemId, value) => {
-  const qty = parseInt(value);
-  // Missing: if (qty < 1) { setError("Quantity must be positive"); return; }
-  updateItem(itemId, qty);  // Allows negative — subtotal goes negative
-};
+if (!formData.cardNumber.trim()) {
+  newErrors.cardNumber = 'Card number is required';
+}
+// BUG: Missing validation for card format
+// Should have: else if (!/^\d{13,19}$/.test(formData.cardNumber.replace(/\s/g, '')))
+//   newErrors.cardNumber = 'Card number must be 13-19 digits';
 ```
+Trigger: Malicious User submits checkout with `card-number-input` set to `abcdefgh`, `12345`, or a 25-digit string. Form accepts and proceeds to success page.
 
-**BUG-004 (Checkout — /checkout):**
+**BUG-005 — Protected routes reachable without authentication** (`pages/cart.jsx`, `pages/checkout.jsx`)
+Neither page reads `isLoggedIn` from `CartContext` to guard rendering. There is no router-level or component-level redirect from `/cart` or `/checkout` to `/login` when `isLoggedIn === false`. The nav swaps Login↔Logout but does not prevent direct URL access.
+
+Trigger: Malicious User navigates directly to `http://localhost:3001/checkout` from a cold session (no prior login). The checkout form renders and is fully usable. Suggested fix:
 ```jsx
-// WRONG (intentional bug): no card number format validation
-const handlePayment = () => {
-  // Missing: if (!/^\d{16}$/.test(cardNumber)) { setCardError("Invalid card number"); return; }
-  processPayment(cardNumber);  // Accepts any string, any length
-};
+useEffect(() => {
+  if (!isLoggedIn) router.replace('/login');
+}, [isLoggedIn, router]);
 ```
+in both protected pages. Anomaly type: `auth_boundary_bypass`.
+
+**BUG-006 — Non-numeric quantity silently removes the item** (`pages/cart.jsx` + `pages/_app.jsx`)
+```jsx
+// cart.jsx handleQuantityChange:
+const quantity = parseInt(value) || 0;          // parseInt("abc") → NaN, || 0 → 0
+updateQuantity(productId, quantity);
+
+// _app.jsx updateQuantity:
+if (quantity <= 0) {
+  removeFromCart(productId);                    // 0 path triggers removal
+}
+```
+Trigger: Confused User types `abc` (or any non-numeric) into a `quantity-input-{id}`. The row disappears without any error message — the user has no feedback that the input was invalid. Same `anomaly_type` family as BUG-003 (`form_accepts_invalid_data`) but different symptom (silent state change vs. wrong numeric).
+
+### Verification
+
+The companion files `demo-app/README.md` and `demo-app/BUGS_EXPLAINED_SIMPLE.md` ship with the demo app and document manual reproduction for BUG-001..BUG-004. BUG-005 and BUG-006 manual repro:
+
+- **BUG-005:** open a fresh incognito window → go directly to `http://localhost:3001/checkout` → confirm checkout form renders without redirect.
+- **BUG-006:** add any item to cart → on `/cart`, change quantity-input value to `abc` → press Tab → confirm row disappears with no error message.
 
 ---
 

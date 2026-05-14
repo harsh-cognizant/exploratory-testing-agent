@@ -9,6 +9,25 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-14 — Phase 7 gate passed (demo-app out of order)
+### Added
+- `demo-app/` — Next.js 14 e-commerce SPA on port 3001 (user-provided)
+- `demo-app/pages/` — `_app.jsx`, `_document.jsx`, `index.jsx`, `login.jsx`, `products.jsx`, `cart.jsx`, `checkout.jsx`
+- `demo-app/styles/globals.css` — custom CSS for class names referenced in JSX (`.header`, `.container`, `.card`, `.product-grid`, `.btn`, etc.)
+- `demo-app/next.config.js`, `tailwind.config.js`, `postcss.config.js`
+- `demo-app/README.md`, `demo-app/BUGS_EXPLAINED_SIMPLE.md` (ship with the app)
+- Two additional bugs documented (BUG-005, BUG-006) — already present in code, previously unflagged
+
+### Changed
+- CLAUDE.md §2 — demo-app subtree updated: lowercase Next.js page filenames, full file list incl. `_app.jsx`/`_document.jsx`/`index.jsx`/`styles/globals.css` and config files
+- CLAUDE.md §10 — rewritten as "Pre-Planted Bug Catalogue" (was "Implementation Guide"); data-testids corrected to match shipped app (`login-button` not `login-btn`, `place-order-btn` not `pay-now-btn`, suffixed ids like `add-to-cart-btn-{id}`, `quantity-input-{id}`, etc.); per-bug detail aligned to actual JSX
+
+### Notes
+- Phase 7 done out of plan order because the user supplied a complete demo-app. Phases 2–6 still pending.
+- npm install resolved 380+ packages (Next.js 14.0.0, React 18.2.0, Tailwind 3.3.5). Dev server starts cleanly; `/`, `/products`, `/login`, `/cart`, `/checkout` all return 200.
+- `/cart` and `/checkout` render an empty-state message when cart is empty — their form testids are conditional. Phase 2 crawler must seed cart state (e.g. click Add-to-Cart on one product) before crawling those routes to discover all elements.
+- The dashboard's CORS allow_origins still targets `localhost:3000` (per CLAUDE.md §4.5); demo-app on `localhost:3001` is the *target*, not a CORS origin.
+
 ## [0.1.0] — 2026-05-13 — Phase 1 gate passed
 ### Added
 - CLAUDE.md instruction file (2632 lines) authored by user, reviewed and edited

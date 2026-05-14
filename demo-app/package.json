@@ -1,0 +1,21 @@
+{
+  "name": "exploratory-testing-demo-app",
+  "version": "1.0.0",
+  "description": "Demo e-commerce app with pre-planted bugs for testing the exploratory agent",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.0.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.3.5"
+  }
+}

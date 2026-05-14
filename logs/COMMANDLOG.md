@@ -99,3 +99,54 @@ Append-only chronological record of every terminal command run.
 - `GET /memory` → 200, `total_findings_in_memory = 0`
 **Result:** SUCCESS — GATE 1 PASSED
 **Notes:** Polling `localhost:8000` returned ECONNREFUSED while uvicorn was still binding; polling `127.0.0.1:8000` succeeded immediately after `Application startup complete`. Lesson: prefer `127.0.0.1` in startup polling code.
+
+---
+
+### 2026-05-14 — Check node/npm toolchain
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `node --version; npm --version`
+**Exit code:** 0
+**Output summary:** Node v24.13.0, npm 11.6.2.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 — Copy user-supplied demo-app into project (Phase 7a)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** PowerShell `Copy-Item` of `_app.jsx`, `login.jsx`, `products.jsx`, `cart.jsx`, `checkout.jsx`, `package.json`, `README.md`, `BUGS_EXPLAINED_SIMPLE.md` from `Hackathon\demo-app\` (source) to `Exploratory_Testing_Agent\demo-app\pages\` and `Exploratory_Testing_Agent\demo-app\` (dest)
+**Exit code:** 0
+**Output summary:** 8 files copied into the proper Next.js pages-router structure.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 — npm install in demo-app
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent\demo-app`
+**Command:** `npm install`
+**Exit code:** 0
+**Output summary:** 380+ packages resolved (next 14.0.0, react 18.2.0, react-dom 18.2.0, tailwindcss 3.3.5, postcss 8.4.31, autoprefixer 10.4.16). Ran in background (≈90 s).
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 — Start demo-app dev server (Phase 7d)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent\demo-app`
+**Command:** `npm run dev` (runs `next dev -p 3001`)
+**Exit code:** — (background process)
+**Output summary:** Next.js 14.0.0 ready on `http://localhost:3001`.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 — Verify all 5 demo-app routes (Phase 7 Gate)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent\demo-app`
+**Command:** `Invoke-WebRequest` against `/`, `/products`, `/login`, `/cart`, `/checkout`
+**Exit code:** 0
+**Output summary:**
+- `/` 200 (2013 bytes, loading splash before client-side redirect to `/products`)
+- `/products` 200 (5222 bytes, 21 data-testids — 6 products × 3 + cart-count + cart-count-display + product-page-cart-count + bug-explanation)
+- `/login` 200 (2940 bytes, 3 testids — email-input, password-input, login-button)
+- `/cart` 200 (2193 bytes, 0 testids — empty-cart state, no form rendered)
+- `/checkout` 200 (2176 bytes, 0 testids — empty-cart state, no form rendered)
+**Result:** SUCCESS — GATE 7 PASSED
+**Notes:** Empty-cart conditional rendering means `/cart` and `/checkout` only expose their form testids after cart is seeded. The Phase 2 crawler must Add-to-Cart at least one product before crawling those routes.
