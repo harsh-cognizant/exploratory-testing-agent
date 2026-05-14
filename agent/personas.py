@@ -23,7 +23,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Constants per CLAUDE.md §1 and §13 quick reference.
-CLAUDE_MODEL: str = "claude-sonnet-4-6"
+CLAUDE_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_PERSONA: int = 1000
 MAX_ACTIONS_PER_PERSONA: int = 8
 
@@ -55,7 +55,8 @@ def _get_client() -> anthropic.Anthropic:
         raise RuntimeError(
             "ANTHROPIC_API_KEY is not set. See CLAUDE.md §1 hard constraints."
         )
-    return anthropic.Anthropic(api_key=api_key)
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
 
 
 def _load_prompt_template(persona: str) -> str:

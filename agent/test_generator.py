@@ -23,7 +23,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Constants per CLAUDE.md §1 and §13.
-CLAUDE_MODEL: str = "claude-sonnet-4-6"
+CLAUDE_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_TEST_GEN: int = 1500
 TESTS_OUTPUT_DIR: str = os.getenv("TESTS_OUTPUT_DIR", "./tests/generated")
 PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "test_generation.txt"
@@ -51,7 +51,8 @@ def _get_client() -> anthropic.Anthropic:
         raise RuntimeError(
             "ANTHROPIC_API_KEY is not set. See CLAUDE.md §1."
         )
-    return anthropic.Anthropic(api_key=api_key)
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
 
 
 def _load_prompt_template() -> str:

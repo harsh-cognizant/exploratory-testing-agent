@@ -119,10 +119,12 @@ async def explore_node(
     # Allow headless override for demos.
     raw_headless = (os.getenv("EXPLORER_HEADLESS") or "true").strip().lower()
     headless = raw_headless not in ("false", "0", "no")
+    slow_mo_ms = int(os.getenv("EXPLORER_SLOW_MO_MS") or "0")
 
     async with async_playwright() as pw:
         browser: Browser = await pw.chromium.launch(
             headless=headless,
+            slow_mo=slow_mo_ms,
             channel=BROWSER_CHANNEL,
         )
         context: BrowserContext = await browser.new_context()
