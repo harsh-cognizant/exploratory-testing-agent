@@ -152,3 +152,51 @@ Read this file to understand WHY the project is in its current state.
 
 ### Session end: 2026-05-14
 ### Gate status: [PASSED] GATE 3 — `/queue` ranks `/checkout`=1.0 CRITICAL at #1, `/cart`=0.6438 HIGH at #3, `/login`=0.6042 HIGH at #5; `risk_band` filter works for `critical`/`high`/`low`.
+
+---
+
+## 2026-05-14 — Day 2 (cont.) — Phases 4-6 Implementation
+**Phase:** 4, 5, 6 — Behavioural Exploration, Memory, Output
+**Person:** All (driven by Claude Code on user's instruction)
+**Goal:** Build the remaining three layers: persona-driven exploration (Phase 4), memory and learning (Phase 5), test generation and reporting (Phase 6). Wire all routes to real data.
+
+### What was done
+- **Phase 4 — Behavioural Exploration Engine:**
+  - Created 3 persona prompt templates (`persona_confused.txt`, `persona_power.txt`, `persona_malicious.txt`)
+  - Created `agent/personas.py` — Claude-based action list generation per persona with closed-set validation, MAX_ACTIONS_PER_PERSONA=8 cap, retry-once JSON parsing
+  - Created `engine/anomaly_detector.py` — AnomalyCollector class capturing JS console errors, HTTP 4xx/5xx, unexpected redirects, form validation bypasses, page crashes; builds structured Finding dicts with reproduction steps
+  - Created `engine/explorer.py` — Playwright-based explorer executing persona action lists on graph nodes, with screenshots on every finding
+  - Promoted `api/routes/findings.py` from stub to real endpoint reading SCAN_STATE with severity filtering
+
+- **Phase 5 — Memory & Learning Loop:**
+  - Created `engine/memory.py` — AgentMemory using ChromaDB PersistentClient(path="./chroma_store") + sentence-transformers all-MiniLM-L6-v2. Constants: similarity_threshold=0.85, positive_adj=+0.15, negative_adj=-0.10
+  - Promoted `api/routes/memory_routes.py` from stub to real endpoint
+  - Wired memory adjustments into brain.py risk scoring step
+
+- **Phase 6 — Output & Test Generation:**
+  - Created `agent/prompts/test_generation.txt` — Pytest test generation prompt template
+  - Created `agent/test_generator.py` — generates Pytest functions from high/critical findings via Claude with syntax validation
+  - Created `engine/report_builder.py` — compiles coverage stats, severity breakdown, and summary
+  - Promoted `api/routes/report.py` from stub to full ReportResponse
+  - Updated `agent/brain.py` with full 13-step orchestration flow
+
+### Verification
+- All 11 Python modules import cleanly (exit code 0)
+- FastAPI server starts cleanly on port 8000
+- /health → 200 ✅, /findings → 200 (empty) ✅, /memory → 200 (empty) ✅, /report → 404 (no scan) ✅
+- sentence-transformers model loaded successfully on first /memory request
+
+### Decisions made
+- **Decision:** Lazy-init singleton AgentMemory in brain.py rather than global init.
+  **Why:** The model download (~90MB) should only happen when memory is actually needed, not at module import time. This keeps server startup fast.
+- **Decision:** Explore only page-type nodes (not individual button/input nodes).
+  **Why:** Buttons and inputs are explored as part of their parent page's action set via persona action lists. Exploring them individually would duplicate work and waste Claude API calls.
+
+### Next session priorities
+1. Run a full end-to-end scan against the demo-app to verify Phase 4 exploration finds pre-planted bugs
+2. Build Phase 8 — Dashboard (React + D3.js)
+3. Integration testing across all layers
+
+### Session end: 2026-05-14
+### Gate status: [PENDING] GATE 4-6 — all code written and imports verified; end-to-end scan pending
+

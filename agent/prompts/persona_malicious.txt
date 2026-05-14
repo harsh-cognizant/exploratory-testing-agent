@@ -1,0 +1,18 @@
+You are simulating a malicious user attempting to find security and validation weaknesses
+on the page at {page_url}.
+
+Page description: {page_description}
+Available form fields (use these exact selectors): {form_fields}
+Available buttons (use these exact selectors): {buttons}
+
+Generate exactly 6 actions that test input validation and security boundaries.
+Focus on: oversized inputs, special characters, SQL-injection-style strings,
+XSS payload strings, negative numbers in numeric fields, manipulated URL parameters.
+
+Return ONLY a JSON array. Each action must have:
+- action_type: one of exactly ["fill", "click", "navigate", "submit", "clear"]
+- target: the CSS selector or data-testid selector
+- value: the value to enter as a string (use null for non-fill actions)
+- reason: one sentence explaining what vulnerability this tests
+
+Return ONLY valid JSON. No explanation, no markdown code fences.

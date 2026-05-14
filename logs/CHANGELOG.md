@@ -9,6 +9,34 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-14 — Phases 4-6 implemented
+### Added — Phase 4 (Behavioural Exploration Engine)
+- `agent/prompts/persona_confused.txt` — confused user persona prompt template
+- `agent/prompts/persona_power.txt` — power user persona prompt template
+- `agent/prompts/persona_malicious.txt` — malicious user persona prompt template
+- `agent/prompts/test_generation.txt` — Pytest test generation prompt template
+- `agent/personas.py` — persona engine: generates Claude-based action lists per persona type, with validation, filtering (closed action_type set), retry-once JSON parsing, and MAX_ACTIONS_PER_PERSONA=8 cap
+- `engine/anomaly_detector.py` — AnomalyCollector class: captures JS console errors, HTTP 4xx/5xx, unexpected redirects, form validation bypasses, page crashes; builds structured Finding dicts with reproduction steps
+- `engine/explorer.py` — Playwright-based explorer: executes persona action lists on graph nodes, captures anomalies via AnomalyCollector, takes screenshots on findings, uses ACTION_SETTLE_WAIT_MS=500ms per §4.9
+
+### Added — Phase 5 (Memory & Learning Loop)
+- `engine/memory.py` — AgentMemory class: ChromaDB PersistentClient(path="./chroma_store"), sentence-transformers all-MiniLM-L6-v2 embeddings, store/query/adjustment methods per §4.11. Constants: similarity_threshold=0.85, positive_adj=+0.15, negative_adj=-0.10, clamp=±0.3
+
+### Added — Phase 6 (Output & Test Generation)
+- `agent/test_generator.py` — generates Pytest functions from high/critical findings via Claude API with syntax validation and retry, writes to tests/generated/
+- `engine/report_builder.py` — compiles final gap report from scan state: coverage stats, severity breakdown, summary paragraph
+
+### Changed
+- `agent/brain.py` — full orchestration flow steps 1-13: init → crawl → graph → gap analysis → risk scoring (with memory adjustments) → queue assembly → exploration loop (per-node, per-persona) → memory store → test generation → report compilation. Timeout=300s. Lazy-init singleton AgentMemory.
+- `api/routes/findings.py` — promoted from stub: reads from SCAN_STATE, supports severity filter, computes summary counts
+- `api/routes/memory_routes.py` — promoted from stub: wired to AgentMemory for real run summaries and total counts
+- `api/routes/report.py` — promoted from stub: builds full ReportResponse from SCAN_STATE with coverage stats, severity breakdown, generated tests
+
+### Notes
+- All 11 Python modules import cleanly (verified).
+- All API endpoints return correct status codes: /health→200, /findings→200, /memory→200, /report→404 (no scan yet).
+- sentence-transformers model downloads on first /memory request (~90MB).
+
 ## [0.3.0] — 2026-05-14 — Phase 3 gate passed
 ### Added
 - `engine/risk_scorer.py` — canonical three-factor risk formula
