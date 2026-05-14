@@ -37,7 +37,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Constants
-DEFAULT_SCAN_TIMEOUT_SECONDS: int = 300
+DEFAULT_SCAN_TIMEOUT_SECONDS: int = 180
 DEFAULT_PERSONAS: List[str] = ["confused_user", "power_user", "malicious_user"]
 
 # Module-level scan state. Keyed by scan_id. Each entry tracks progress so
