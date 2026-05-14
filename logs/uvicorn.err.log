@@ -1,0 +1,5 @@
+INFO:     Started server process [26660]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Scan scan_20260514_184429: skipping gap analysis (ANTHROPIC_API_KEY is not set. See CLAUDE.md §1 hard constraints — either create a .env file with the key or set the user env var via PowerShell.)
