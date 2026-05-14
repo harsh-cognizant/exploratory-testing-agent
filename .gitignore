@@ -11,3 +11,7 @@ dist/
 *.egg-info/
 .claude/
 .vs/
+# Scratch/debug files (anything starting with underscore at repo root)
+/_*.txt
+/_*.py
+/_*.json

@@ -7,6 +7,7 @@ Created: 2026-05-14
 """
 
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urljoin, urlparse
@@ -302,9 +303,23 @@ async def crawl(app_url: str, max_pages: int = 50) -> List[Dict[str, Any]]:
     visited: Set[str] = set()
     queue: List[tuple[str, int]] = [("/", 0)]
 
+    # Allow the operator to drive the crawl in a visible browser by setting
+    # CRAWLER_HEADLESS=false. Default is headless for CI / unattended scans.
+    raw_headless = (os.getenv("CRAWLER_HEADLESS") or "true").strip().lower()
+    headless = raw_headless not in ("false", "0", "no")
+    slow_mo_ms = int(os.getenv("CRAWLER_SLOW_MO_MS") or "0")
+
     async with async_playwright() as pw:
-        browser: Browser = await pw.chromium.launch(headless=True, channel=BROWSER_CHANNEL)
+        browser: Browser = await pw.chromium.launch(
+            headless=headless,
+            channel=BROWSER_CHANNEL,
+            slow_mo=slow_mo_ms,
+        )
         context: BrowserContext = await browser.new_context()
+        logger.info(
+            "Launched Chrome (headless=%s, slow_mo=%dms, channel=%s)",
+            headless, slow_mo_ms, BROWSER_CHANNEL,
+        )
         try:
             await _seed_cart_state(context, app_url)
 

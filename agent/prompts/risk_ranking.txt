@@ -1,0 +1,19 @@
+You are a QA risk analyst. Rank the following untested nodes by risk priority.
+
+Nodes to rank:
+{gap_nodes_json}
+
+Application context: {app_description}
+
+Consider these risk factors in order of importance:
+1. Business criticality (auth and payment flows = highest risk)
+2. Potential for user data loss or corruption
+3. Frequency of user interaction
+4. Complexity of the flow (more steps = more risk)
+
+Return ONLY a JSON array of objects in order from highest to lowest risk.
+Each object must have:
+- node_id: string (must match exactly one of the node_ids provided above)
+- reason: one sentence explaining why this node is ranked at this position
+
+Return ONLY valid JSON. No explanation, no markdown code fences.

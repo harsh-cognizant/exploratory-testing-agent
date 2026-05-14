@@ -4,10 +4,10 @@ Purpose: Central orchestrator. Owns SCAN_STATE (the module-level dict keyed by
          scan_id) and runs the agent loop as a background asyncio task per
          CLAUDE.md §4.16.
 
-         Phase 2 implements steps 1-6 (init → crawl → graph → gap analysis).
-         Steps 7-13 (risk scoring, exploration, memory, test generation,
-         report compilation) are stubbed for later phases — current scans
-         complete cleanly without them.
+         Phase 3 implements steps 1-8 (init → crawl → graph → gap analysis →
+         risk scoring → queue assembly). Steps 9-13 (exploration, memory,
+         test generation, report compilation) are stubbed for later phases —
+         current scans complete cleanly without them.
 Created: 2026-05-14
 """
 
@@ -24,6 +24,7 @@ from agent.gap_analyser import analyse_gaps
 from api.models import ScanRequest, ScanStatus
 from engine.crawler import crawl
 from engine.graph_builder import build_coverage_graph
+from engine.risk_scorer import build_queue, score_graph
 
 load_dotenv()
 
@@ -60,6 +61,7 @@ def _init_scan(scan_id: str, request: ScanRequest) -> None:
         "graph": None,
         "findings": [],
         "gaps": [],
+        "queue": [],
         "report": None,
         "started_at": time.monotonic(),
         "error": None,
@@ -82,12 +84,12 @@ def _read_timeout_seconds() -> int:
 
 
 async def _run_scan(scan_id: str, request: ScanRequest) -> None:
-    """Execute the Phase 2 subset of the orchestration flow.
+    """Execute the Phase 3 subset of the orchestration flow.
 
-    Per CLAUDE.md §4.16, the full flow has 13 steps. Phase 2 covers steps
-    1-6 (init, crawl, graph build, gap analysis). Risk scoring, exploration,
-    memory query, test generation, and report compilation are placeholders
-    until later phases land.
+    Per CLAUDE.md §4.16, the full flow has 13 steps. Phase 3 covers steps
+    1-8 (init, crawl, graph build, gap analysis, risk scoring, queue
+    assembly). Exploration, memory query, test generation, and report
+    compilation are placeholders until later phases land.
 
     Args:
         scan_id: The scan identifier returned by POST /scan.
@@ -134,7 +136,26 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
                 state["gaps"] = []
                 state["error"] = str(exc)
 
-        # Phase 2 stops here. Steps 7-13 will fill in across Phases 3-6.
+        # Step 7: risk scoring. The formula is deterministic and CSV-driven —
+        # no Claude call here, so the timeout check is a courtesy only.
+        if _elapsed_over_budget():
+            logger.warning("Scan %s: timeout before risk scoring; skipping", scan_id)
+        else:
+            state["current_node"] = "risk_scorer"
+            state["progress_percent"] = 85
+            score_graph(graph)
+            # Step 8: assemble the ranked queue snapshot for /queue consumers.
+            queue_items = build_queue(graph)
+            state["queue"] = [item.model_dump() for item in queue_items]
+            state["nodes_total"] = graph.number_of_nodes()
+            logger.info(
+                "Scan %s: risk_scorer ranked %d nodes; top=%s",
+                scan_id,
+                len(queue_items),
+                queue_items[0].node_id if queue_items else "—",
+            )
+
+        # Phase 3 stops here. Steps 9-13 will fill in across Phases 4-6.
         state["progress_percent"] = 100
         state["current_node"] = None
         state["current_persona"] = None

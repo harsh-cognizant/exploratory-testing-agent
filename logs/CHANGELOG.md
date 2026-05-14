@@ -9,6 +9,43 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-14 — Phase 3 gate passed
+### Added
+- `engine/risk_scorer.py` — canonical three-factor risk formula
+  (0.35·change_frequency + 0.40·defect_density + 0.25·criticality) with
+  `CRITICALITY_MAP` from CLAUDE.md §4.8; loads `data/simulated_defect_history.csv`
+  and `data/simulated_change_frequency.csv`, normalises each column by its max,
+  applies the formula, sets `risk_score` / `risk_band` / `defect_count_historical`
+  / `business_criticality` in place on every node. Exposes `score_graph` and
+  `build_queue` (with optional `risk_band` filter). Accepts optional
+  `memory_adjustments` parameter for Phase 5 wiring; clamps to [0, 1].
+- `agent/prompts/risk_ranking.txt` — verbatim from CLAUDE.md §7 (for future
+  Claude-based reranking; not yet called by brain.py).
+- `engine/crawler.py`: `CRAWLER_HEADLESS` and `CRAWLER_SLOW_MO_MS` env vars
+  allow watching the crawl live in a real Chrome window. Default remains
+  headless for unattended scans.
+
+### Changed
+- `agent/brain.py` — orchestration extended to steps 7 (`score_graph`) and 8
+  (`build_queue` snapshot stored in `SCAN_STATE[scan_id]["queue"]`). The
+  remaining §4.16 steps 9–13 stay stubbed until Phases 4–6.
+- `api/routes/queue.py` — promoted from stub: reads scored graph from
+  `SCAN_STATE` and returns a ranked `QueueResponse`. Honours optional
+  `risk_band` query filter ("critical"|"high"|"medium"|"low").
+- `.gitignore` — added `/_*.txt`, `/_*.py`, `/_*.json` patterns to keep
+  scratch files out of commits.
+
+### Notes
+- Gate 3 PASSED. Scan against `http://127.0.0.1:3001` returns 16 nodes
+  ranked by score:
+  - `node_checkout` and `node_checkout_continue_shopping` → 1.0000 (CRITICAL)
+  - `node_cart` and `node_cart_continue_shopping` → 0.6438 (HIGH)
+  - five `/login` nodes → 0.6042 (HIGH)
+  - seven `/products` nodes → 0.3229 (LOW)
+  Top-3 of /queue contains 2 `/checkout` nodes per CLAUDE.md §9 Gate 3.
+- `/queue?risk_band=critical` filter returns only the two `/checkout` nodes,
+  confirming the filter contract.
+
 ## [0.2.0] — 2026-05-14 — Phase 2 gate passed
 ### Added
 - `engine/crawler.py` — async Playwright BFS crawler with `channel='chrome'` (uses system Chrome to bypass corporate TLS proxy that blocks chromium-headless-shell download); 3-level depth cap, 10s per-page timeout, networkidle wait, fragment/query stripping, ASCII-only element-id sanitisation
