@@ -1,33 +1,30 @@
 """
 Module: api/routes/scan.py
-Purpose: POST /scan — starts an async background scan task in agent/brain.py.
-         Phase 1 stub: declares the endpoint and returns a placeholder
-         ScanResponse with status=STARTED. Full orchestration arrives in Phase 4.
+Purpose: POST /scan — kicks off an async background scan via agent.brain.
+         The endpoint must return immediately (CLAUDE.md §4.16); the scan
+         runs as an asyncio task tracked in SCAN_STATE.
 Created: 2026-05-13
+Updated: 2026-05-14 (Phase 2 — wired to agent.brain)
 """
-
-from datetime import datetime
 
 from fastapi import APIRouter
 
+from agent.brain import start_scan
 from api.models import ScanRequest, ScanResponse, ScanStatus
 
 router = APIRouter()
 
 
 @router.post("/scan", response_model=ScanResponse)
-async def start_scan(request: ScanRequest) -> ScanResponse:
+async def post_scan(request: ScanRequest) -> ScanResponse:
     """Start a new scan against the target application.
-
-    Phase 1 stub — does not yet trigger brain.py orchestration. Returns a
-    well-formed ScanResponse so the dashboard can wire up against the contract.
 
     Args:
         request: ScanRequest with app_url, existing_tests_path, max_nodes, personas.
 
     Returns:
-        ScanResponse with a generated scan_id, status=STARTED, and
-        the default estimated_duration_seconds.
+        ScanResponse with a generated scan_id and status=STARTED. The actual
+        crawl runs in the background; poll GET /scan/{scan_id}/status to track.
     """
-    scan_id = f"scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    scan_id = await start_scan(request)
     return ScanResponse(scan_id=scan_id, status=ScanStatus.STARTED)

@@ -1,0 +1,20 @@
+You are a senior QA engineer reviewing test coverage for a web application.
+
+Application routes and elements discovered:
+{routes_json}
+
+Currently covered by existing tests:
+{covered_nodes_json}
+
+Identify the top {max_gaps} most meaningful coverage gaps.
+For each gap, explain why it is a risk — consider: is it an auth flow?
+Does it handle user data? Are there edge cases in form inputs?
+Do not include gaps for static content pages or navigation links.
+
+Return ONLY a JSON array. Each item must have:
+- node_id: string (must match one of the node ids provided above; the specific element/flow is already encoded inside node_id, do NOT return a separate "element" field)
+- page: URL path string
+- gap_reason: one clear sentence explaining the testing gap
+- risk_factors: array of strings from ["auth", "payment", "data", "input_validation", "navigation", "error_handling"]
+
+Return ONLY valid JSON. No explanation, no markdown code fences.

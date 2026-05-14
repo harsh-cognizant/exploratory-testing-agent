@@ -9,6 +9,25 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-14 — Phase 2 gate passed
+### Added
+- `engine/crawler.py` — async Playwright BFS crawler with `channel='chrome'` (uses system Chrome to bypass corporate TLS proxy that blocks chromium-headless-shell download); 3-level depth cap, 10s per-page timeout, networkidle wait, fragment/query stripping, ASCII-only element-id sanitisation
+- `engine/graph_builder.py` — converts crawler output to a NetworkX DiGraph; coverage overlay from `data/existing_tests_mock.json`; `contains` edges page→element and `navigation` edges page→page; `graph_to_response_dict` serialises for `GraphResponse`
+- `agent/prompts/gap_analysis.txt` — verbatim from CLAUDE.md §7
+- `agent/gap_analyser.py` — Claude API client with `safe_parse_json`, retry-once on JSON parse failure, 30-node batching per §4.12, fail-fast on missing `ANTHROPIC_API_KEY`
+- `agent/brain.py` — minimal orchestration covering §4.16 steps 1–6 (init → crawl → graph → gap analysis). Steps 7–13 stubbed for Phases 3–6. `SCAN_STATE` module dict, `start_scan` schedules an asyncio.Task, `get_scan_state`/`get_latest_completed_scan_id` for route handlers.
+- `engine/__init__.py`, `agent/__init__.py`
+
+### Changed
+- `api/routes/scan.py` — promoted from stub: calls `agent.brain.start_scan` and returns the new scan_id
+- `api/routes/scan_status.py` — reads from `SCAN_STATE`, returns 404 for unknown scan_ids
+- `api/routes/graph.py` — reads from `SCAN_STATE`, uses `graph_to_response_dict` to serialise; falls back to latest completed scan when `scan_id` query param omitted
+
+### Notes
+- Phase 2 Gate PASSED: scan against `http://127.0.0.1:3001` produces a 16-node graph (4 pages × forms + buttons), 12 covered, 4 gaps, 75% coverage. All 4 demo-app routes discovered (`/login`, `/products`, `/cart`, `/checkout`). 16 edges (10 `contains` + 6 `navigation`).
+- **Known limitation:** `/cart` and `/checkout` form-element discovery still falls back to the empty-cart branch even after UI-driven Add-to-Cart click. Root cause: demo-app's `useEffect(() => localStorage.setItem('cart', JSON.stringify(cartItems)), [cartItems])` fires on every fresh page mount with `cartItems = []`, racing any pre-seed and writing `"[]"` before the read-effect populates state. Mitigations attempted: (a) `context.add_init_script` to set localStorage pre-mount — lost to race, (b) UI-driven Add-to-Cart click — survives within page but each new page mount in the BFS still resets. The proper fix is either Phase 4-style stateful navigation (one Playwright context performing a real flow from /products → /cart → /checkout without closing the page) or a demo-app-side useRef guard. Documented for Phase 4.
+- Corporate TLS proxy blocks `playwright install chromium` (UNABLE_TO_GET_ISSUER_CERT_LOCALLY). Workaround: `channel='chrome'` uses the user's system Chrome installation instead of Playwright's bundled chromium.
+
 ## [0.7.0] — 2026-05-14 — Phase 7 gate passed (demo-app out of order)
 ### Added
 - `demo-app/` — Next.js 14 e-commerce SPA on port 3001 (user-provided)
