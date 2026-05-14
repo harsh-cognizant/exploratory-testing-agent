@@ -9,6 +9,32 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-05-15 — Phase 9 gate passed (Integration & Hardening)
+### Added
+- `README.md` — comprehensive project documentation: architecture diagram, 5-layer overview, quick start guide, API endpoints table, demo app bug catalogue, persona descriptions, project structure
+
+### Notes
+- Phase 9 complete. All three services verified running simultaneously (demo-app:3001, API:8000, dashboard:3000).
+
+## [0.8.0] — 2026-05-15 — Phase 8 gate passed (Dashboard)
+### Added
+- `dashboard/` — React + Vite + D3.js frontend on port 3000
+- `dashboard/src/api.js` — API client for all 7 backend endpoints with error handling
+- `dashboard/src/components/ScanControl.jsx` — URL input, Start Scan button, progress bar with 2s polling
+- `dashboard/src/components/CoverageGraph.jsx` — D3.js force simulation with risk-colored nodes, zoom, drag, memory indicators
+- `dashboard/src/components/RiskQueue.jsx` — filterable risk-ranked queue with severity badges
+- `dashboard/src/components/FindingsFeed.jsx` — live findings feed (3s polling during scan) with persona badges, severity colors, screenshot thumbnails
+- `dashboard/src/components/MemoryPanel.jsx` — ChromaDB past run summaries
+- `dashboard/src/components/ReportPanel.jsx` — 4 metric cards, severity-sorted findings, syntax-highlighted generated test code with copy button
+- `dashboard/src/components/MetricCards.jsx` — 6 key metric indicators
+- `dashboard/src/App.jsx` — tab-based layout (Graph|Queue|Findings|Memory|Report) with detail sidebar
+- `dashboard/src/App.css` — premium dark theme: glassmorphism, gradient header, Inter font, micro-animations
+- `dashboard/vite.config.js` — Vite config with API proxy to FastAPI on port 8000
+
+### Notes
+- Dashboard renders the force-directed graph from live API data. Clicking Start Scan triggers POST /scan and status polling begins. Findings appear in feed after scan completes.
+- D3.js node colors: critical=#EF4444, high=#F97316, medium=#EAB308, low=#22C55E, covered=#6B7280 (per CLAUDE.md §11)
+
 ## [0.7.1] — 2026-05-14 — OpenRouter integration & demo mode
 ### Changed
 - `agent/gap_analyser.py` — `CLAUDE_MODEL` now reads from `ANTHROPIC_MODEL` env var (fallback `claude-sonnet-4-6`); `_get_client()` passes `ANTHROPIC_BASE_URL` to `anthropic.Anthropic()` when set, enabling OpenRouter routing
