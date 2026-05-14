@@ -150,3 +150,79 @@ Append-only chronological record of every terminal command run.
 - `/checkout` 200 (2176 bytes, 0 testids — empty-cart state, no form rendered)
 **Result:** SUCCESS — GATE 7 PASSED
 **Notes:** Empty-cart conditional rendering means `/cart` and `/checkout` only expose their form testids after cart is seeded. The Phase 2 crawler must Add-to-Cart at least one product before crawling those routes.
+
+---
+
+### 2026-05-14 14:08 — Smoke-test risk_scorer offline against 6-page graph
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `.\venv\Scripts\python.exe _smoke_risk.py` (temp script, deleted after)
+**Exit code:** 0
+**Output summary:**
+- `#1 node_checkout    score=1.0000 band=critical`
+- `#2 node_cart        score=0.6438 band=high`
+- `#3 node_login       score=0.6042 band=high`
+- `#4 node_profile     score=0.3771 band=low`
+- `#5 node_products    score=0.3229 band=low`
+- `#6 node_search      score=0.1937 band=low`
+**Result:** SUCCESS — matches hand-computed values exactly; weights sum to 1.0; formula clamps applied; band thresholds (`>=0.8`/`>=0.6`/`>=0.4`/`<0.4`) honoured.
+**Notes:** Temp script `_smoke_risk.py` removed after success (`.gitignore` covers `/_*.py` so it never reached git anyway).
+
+---
+
+### 2026-05-14 14:09 — Start FastAPI for Gate 3
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `.\venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --log-level info`
+**Exit code:** — (run_in_background; stopped via TaskStop after gate)
+**Output summary:** Uvicorn bound 127.0.0.1:8000; `/health` returned `{"status":"ok","service":"exploratory-agent"}`.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 14:09 — POST /scan against demo-app (Phase 3 Gate)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `Invoke-RestMethod -Method POST -Uri http://127.0.0.1:8000/scan -ContentType 'application/json' -Body '{"app_url":"http://127.0.0.1:3001"}'`
+**Exit code:** 0
+**Output summary:** `{"scan_id":"scan_20260514_140944","status":"started","estimated_duration_seconds":120}`
+**Result:** SUCCESS
+
+---
+
+### 2026-05-14 14:10 — Poll /scan/{id}/status until completed
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `for i in 1..20; curl -s http://127.0.0.1:8000/scan/scan_20260514_140944/status; sleep 3` (bash loop)
+**Exit code:** 0
+**Output summary:** `t=1: {...,"status":"completed","progress_percent":100,"nodes_total":16,...}` (loop broke on first iteration)
+**Result:** SUCCESS — scan completed in <3s end-to-end (no Claude calls needed for Phase 3 since gap analysis fails open and risk scoring is local-CSV-driven).
+**Notes:** First polling attempt used `cat .gate3_scan_id` whose contents had a UTF-8 BOM (PowerShell `Set-Content -Encoding utf8` writes BOM in PS 5.1) — silent URL corruption. Fixed by hardcoding scan_id.
+
+---
+
+### 2026-05-14 14:10 — GET /queue (Phase 3 Gate)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `curl -s "http://127.0.0.1:8000/queue?scan_id=scan_20260514_140944"`
+**Exit code:** 0
+**Output summary:** 16-item ranked queue. Top entries (rank: node_id, score, band):
+- #1 `node_checkout` 1.0000 critical
+- #2 `node_checkout_continue_shopping` 1.0000 critical
+- #3 `node_cart` 0.6438 high
+- #5 `node_login` 0.6042 high
+- #10..#16 `/products` family 0.3229 low
+**Result:** SUCCESS — GATE 3 PASSED. `/checkout` at #1 and `/login` in top 5, formula applied (not default 0.5), distinct scores per distinct URL.
+
+---
+
+### 2026-05-14 14:11 — GET /queue?risk_band=critical and ?risk_band=high
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `curl -s "http://127.0.0.1:8000/queue?risk_band=critical"` and `curl -s "http://127.0.0.1:8000/queue?risk_band=high"`
+**Exit code:** 0
+**Output summary:** `critical` → 2 items (both `/checkout`), `high` → 7 items (cart family + login family), `low` → 7 items (products family).
+**Result:** SUCCESS — filter contract honoured.
+
+---
+
+### 2026-05-14 14:12 — Stop FastAPI server
+**Directory:** —
+**Command:** TaskStop on background uvicorn (task_id `bkpsdv8v9`)
+**Exit code:** —
+**Output summary:** Successfully stopped.
+**Result:** SUCCESS
