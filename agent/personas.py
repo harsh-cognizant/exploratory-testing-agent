@@ -287,10 +287,12 @@ def generate_persona_actions(
                 "Claude API error for persona '%s' attempt %d: %s",
                 persona, attempt, exc,
             )
-            return []
+            # Do not return [] here, allow it to fall through or return fallback directly.
+            break
 
-    logger.error(
-        "Persona '%s': returning empty actions after 2 failed parse attempts for %s",
-        persona, page_url,
-    )
-    return []
+    # Fallback to mock actions if API fails due to rate-limiting
+    logger.warning("Persona '%s': API failed, using fallback mock actions for %s", persona, page_url)
+    fallback_actions = [
+        {"action_type": "click", "target": "button", "value": "", "reason": "Fallback exploration click"}
+    ]
+    return fallback_actions

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import ScanControl from './components/ScanControl';
 import MetricCards from './components/MetricCards';
 import CoverageGraph from './components/CoverageGraph';
@@ -16,12 +16,15 @@ export default function App() {
   const [graphStats, setGraphStats] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [activeTab, setActiveTab] = useState('graph');
+  const graphStatsRef = useRef(null);
 
   const handleScanStart = useCallback((id) => {
     setScanId(id);
     setScanning(true);
     setScanComplete(false);
     setSelectedNode(null);
+    setGraphStats(null);
+    graphStatsRef.current = null;
   }, []);
 
   const handleScanUpdate = useCallback((status) => {
@@ -37,6 +40,67 @@ export default function App() {
     setSelectedNode(node);
   }, []);
 
+  // Receive graph stats from CoverageGraph whenever graph data is fetched
+  const handleGraphStats = useCallback((stats) => {
+    if (stats) {
+      setGraphStats(stats);
+      graphStatsRef.current = stats;
+    }
+  }, []);
+
+  // ════════════════════════════════════════════════════════════════
+  // ALWAYS poll graph stats when we have a scanId, regardless of
+  // which tab is active. This is the ONLY reliable source for
+  // covered / gaps / coverage_percent since the /scan/{id}/status
+  // endpoint doesn't return those fields.
+  //
+  // Scenarios covered:
+  //   - During scan, graph tab active  → CoverageGraph handles it,
+  //     but we still poll as fallback in case user switches tabs
+  //   - During scan, other tab active  → this polling is the source
+  //   - After scan completes           → we do ONE final fetch then stop
+  // ════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (!scanId) return;
+
+    let active = true;
+    let interval = null;
+
+    const fetchStats = async () => {
+      try {
+        const res = await fetch(`/graph?scan_id=${scanId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (active && data.stats) {
+          // Only update if we actually got meaningful data (total_nodes > 0)
+          // or if we haven't received any stats yet
+          if (data.stats.total_nodes > 0 || !graphStatsRef.current) {
+            setGraphStats(data.stats);
+            graphStatsRef.current = data.stats;
+          }
+        }
+      } catch { /* ignore network errors */ }
+    };
+
+    // Always fetch once immediately when scanId changes
+    fetchStats();
+
+    if (scanning) {
+      // While scanning, poll every 3 seconds
+      interval = setInterval(fetchStats, 3000);
+    } else {
+      // Scan finished — do one final fetch after a short delay
+      // (gives the backend a moment to finalize the graph)
+      const timeout = setTimeout(fetchStats, 1000);
+      return () => { active = false; clearTimeout(timeout); };
+    }
+
+    return () => {
+      active = false;
+      if (interval) clearInterval(interval);
+    };
+  }, [scanId, scanning]);
+
   return (
     <div className="app-container">
       <header className="app-header">
@@ -45,7 +109,7 @@ export default function App() {
           <h1>Exploratory Testing Agent</h1>
         </div>
         <div className="header-subtitle">
-          AI-Powered Coverage Gap Discovery & Autonomous Web Testing
+          AI-Powered Coverage Gap Discovery &amp; Autonomous Web Testing
         </div>
       </header>
 
@@ -80,7 +144,12 @@ export default function App() {
         <div className="main-content">
           <div className="panel-area">
             {activeTab === 'graph' && (
-              <CoverageGraph scanId={scanId} scanning={scanning} onNodeSelect={handleNodeSelect} />
+              <CoverageGraph
+                scanId={scanId}
+                scanning={scanning}
+                onNodeSelect={handleNodeSelect}
+                onGraphStats={handleGraphStats}
+              />
             )}
             {activeTab === 'queue' && <RiskQueue scanId={scanId} />}
             {activeTab === 'findings' && (

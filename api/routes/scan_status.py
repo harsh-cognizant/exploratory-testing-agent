@@ -1,9 +1,10 @@
 """
 Module: api/routes/scan_status.py
 Purpose: GET /scan/{scan_id}/status — reads SCAN_STATE in agent.brain and
-         returns the current progress snapshot.
+         returns the current progress snapshot including coverage stats.
 Created: 2026-05-13
 Updated: 2026-05-14 (Phase 2 — wired to SCAN_STATE)
+Updated: 2026-05-15 (Added coverage stats from graph to response)
 """
 
 from fastapi import APIRouter, HTTPException
@@ -22,7 +23,8 @@ async def get_status(scan_id: str) -> ScanStatusResponse:
         scan_id: The scan identifier returned by POST /scan.
 
     Returns:
-        ScanStatusResponse populated from SCAN_STATE.
+        ScanStatusResponse populated from SCAN_STATE, including coverage
+        stats when the graph is available.
 
     Raises:
         HTTPException(404): if scan_id is unknown.
@@ -31,6 +33,18 @@ async def get_status(scan_id: str) -> ScanStatusResponse:
     if state is None:
         raise HTTPException(status_code=404, detail=f"scan_id '{scan_id}' not found")
     status = state.get("status", ScanStatus.STARTED)
+
+    # Compute coverage stats from graph if it's been built.
+    covered = 0
+    gaps = 0
+    coverage_pct = 0.0
+    graph = state.get("graph")
+    if graph is not None:
+        total = graph.number_of_nodes()
+        covered = sum(1 for _, attrs in graph.nodes(data=True) if attrs.get("covered"))
+        gaps = total - covered
+        coverage_pct = round((covered / total) * 100, 1) if total else 0.0
+
     return ScanStatusResponse(
         scan_id=scan_id,
         status=status if isinstance(status, ScanStatus) else ScanStatus(status),
@@ -40,4 +54,7 @@ async def get_status(scan_id: str) -> ScanStatusResponse:
         findings_so_far=int(state.get("findings_so_far", 0)),
         current_node=state.get("current_node"),
         current_persona=state.get("current_persona"),
+        covered_nodes=covered,
+        gap_nodes=gaps,
+        coverage_percent=coverage_pct,
     )

@@ -1,4 +1,12 @@
 export default function MetricCards({ scanStatus, graphStats }) {
+  // Coverage data comes from TWO sources:
+  //   1. graphStats  — from /graph endpoint (via CoverageGraph or App polling)
+  //   2. scanStatus  — from /scan/{id}/status endpoint (polled every 2s by ScanControl)
+  // We prefer graphStats when available; fall back to scanStatus fields.
+  const covered = graphStats?.covered ?? scanStatus?.covered_nodes ?? null;
+  const gaps = graphStats?.gaps ?? scanStatus?.gap_nodes ?? null;
+  const coveragePct = graphStats?.coverage_percent ?? scanStatus?.coverage_percent ?? null;
+
   const cards = [
     {
       icon: '🌐',
@@ -8,13 +16,13 @@ export default function MetricCards({ scanStatus, graphStats }) {
     {
       icon: '✅',
       label: 'Covered',
-      value: graphStats?.covered ?? '—',
+      value: covered != null ? covered : '—',
       color: '#22C55E',
     },
     {
       icon: '🔴',
       label: 'Coverage Gaps',
-      value: graphStats?.gaps ?? '—',
+      value: gaps != null ? gaps : '—',
       color: '#EF4444',
     },
     {
@@ -26,12 +34,13 @@ export default function MetricCards({ scanStatus, graphStats }) {
     {
       icon: '📊',
       label: 'Coverage %',
-      value: graphStats?.coverage_percent != null ? `${graphStats.coverage_percent.toFixed(1)}%` : '—',
+      value: coveragePct != null ? `${Number(coveragePct).toFixed(1)}%` : '—',
     },
     {
       icon: '🔄',
       label: 'Progress',
       value: scanStatus?.progress_percent != null ? `${scanStatus.progress_percent}%` : '—',
+      animatedWidth: scanStatus?.progress_percent != null ? scanStatus.progress_percent : null,
     },
   ];
 
@@ -44,6 +53,14 @@ export default function MetricCards({ scanStatus, graphStats }) {
             {c.value}
           </div>
           <div className="mc-label">{c.label}</div>
+          {c.animatedWidth != null && (
+            <div className="mc-progress-mini">
+              <div
+                className="mc-progress-mini-fill"
+                style={{ width: `${c.animatedWidth}%` }}
+              />
+            </div>
+          )}
         </div>
       ))}
     </div>
