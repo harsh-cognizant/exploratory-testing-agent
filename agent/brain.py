@@ -231,6 +231,9 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
 
             total_explore = len(explore_queue) * len(personas)
             explored_count = 0
+            explored_pages: set[str] = set()
+            persona_call_attempts = 0
+            persona_call_successes = 0
 
             for page_item in explore_queue:
                 if _elapsed_over_budget():
@@ -257,6 +260,7 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
                     )
 
                     # Generate persona-specific actions via Claude.
+                    persona_call_attempts += 1
                     try:
                         actions = generate_persona_actions(
                             persona=persona,
@@ -273,6 +277,7 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
 
                     if not actions:
                         continue
+                    persona_call_successes += 1
 
                     # Run Playwright exploration with the action list.
                     try:
@@ -293,14 +298,31 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
                     all_findings.extend(findings)
                     state["findings"] = all_findings
                     state["findings_so_far"] = len(all_findings)
-                    state["nodes_explored"] = len(set(
-                        f.get("node_id") for f in all_findings
-                    ))
+                    # nodes_explored = unique pages actually visited by the
+                    # explorer (regardless of whether a finding was produced).
+                    # The previous formulation (unique node_ids inside findings)
+                    # collapsed to 0 whenever a scan found no bugs, making the
+                    # dashboard look like nothing ran. We track explored pages
+                    # via the persona loop in `explored_pages`.
+                    explored_pages.add(node_id)
+                    state["nodes_explored"] = len(explored_pages)
 
             logger.info(
-                "Scan %s: exploration complete — %d findings from %d node-persona combos",
-                scan_id, len(all_findings), explored_count,
+                "Scan %s: exploration complete — %d findings from %d/%d node-persona combos",
+                scan_id, len(all_findings), persona_call_successes, persona_call_attempts,
             )
+
+            # If every persona call failed, the LLM backend is unreachable
+            # (corp proxy block, bad key, rate limit, etc). Record the
+            # diagnosis on scan state so the dashboard / /report consumer
+            # surfaces something better than "completed with 0 findings".
+            if persona_call_attempts > 0 and persona_call_successes == 0:
+                state["error"] = (
+                    "LLM backend unreachable: every persona action call failed. "
+                    "Check ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN, network "
+                    "egress (corporate proxy may block the endpoint), and that "
+                    "the configured model is available."
+                )
 
         # ── Step 10: Memory store ────────────────────────────────────
         state["current_node"] = "memory"

@@ -200,3 +200,80 @@ Read this file to understand WHY the project is in its current state.
 ### Session end: 2026-05-14
 ### Gate status: [PENDING] GATE 4-6 — all code written and imports verified; end-to-end scan pending
 
+---
+
+## 2026-05-18 — Day 5 — Live debugging on corp network; resilience + offline mode
+**Phase:** Post-Phase-9 hardening (no new feature phase)
+**Person:** All (driven by Claude Code on user's instruction)
+**Goal:** Pull updated dev branch, run the application end-to-end, identify what's actually broken, fix it.
+
+### What was done
+- Pulled commit `21d160f` ("Update scanning logic and dashboard components (#1)") from `origin/dev` — 57 files added/changed including the dashboard scaffold, persona engine, anomaly detector, explorer, memory, report builder, test generator, and full orchestration in `agent/brain.py`
+- Started uvicorn + demo-app, triggered an end-to-end scan against `http://localhost:3001` with the `confused_user` persona. Result: `status=completed, progress=100%, nodes_total=16, nodes_explored=0, findings=0`. Symptom: scan looks "successful" but does nothing.
+- Decoded the UTF-16 uvicorn log (PowerShell `Out-File` writes UTF-16 by default) and traced four root causes:
+  1. `ANTHROPIC_API_KEY` not set anywhere in the user's environment (despite the user's belief otherwise) → gap analyser and persona generator both throw, the orchestrator swallows it, scan completes silently
+  2. `sentence-transformers` first-time download hit `[SSL: CERTIFICATE_VERIFY_FAILED]` against `huggingface.co` → 5-retry storm, then memory disabled
+  3. `nodes_explored` was being computed as `len(set(finding.node_id))` so 0 findings always meant 0 explored — misleading
+  4. Persona fallback `[{action_type: 'click', target: 'button'}]` produces false-positive click noise when LLM is unreachable
+- User asked to switch the AI backend to OpenRouter (base URL `https://openrouter.ai/api`, auth token `sk-or-v1-…`, model `poolside/laguna-m.1:free`). Wrote `.env`, refactored `_get_client()` in all three agent modules to support `ANTHROPIC_AUTH_TOKEN` (Bearer auth) alongside `ANTHROPIC_API_KEY` (x-api-key)
+- Replaced naïve TLS handling: installed `truststore` and inject it in `api/main.py` before any HTTPS-using import, so Python validates against the Windows trust store (which already has the corp CA via GPO)
+- Tested connectivity to confirm the TLS plumbing worked: `httpx.get('https://api.anthropic.com/')` now returns a real `404`, not a TLS error. Then `https://openrouter.ai/api/v1/models` returned a 403 page — but the page body is a **Cognizant Zscaler "Security Exception" block page**, not an OpenRouter response. TLS handshake completes; the URL itself is filtered. `https://huggingface.co/` is blocked the same way
+- Asked the user how to proceed; user selected "Skip AI — validate plumbing only"
+- Implemented `LLM_OFFLINE=1` mode:
+  - `agent/offline_mocks.py` — canned (persona, path) action lists. Each pair deliberately targets one of the demo-app bugs from CLAUDE.md §10 (BUG-001 empty password, BUG-002 NaN cart count, BUG-003 negative quantity, BUG-004 invalid card, BUG-006 non-numeric quantity)
+  - `agent/personas.py` — short-circuits to mocks when `LLM_OFFLINE=1`
+  - `agent/gap_analyser.py` — returns every uncovered node as a heuristic gap when offline
+  - `agent/test_generator.py` — emits a deterministic Pytest stub per high/critical finding when offline (so the report panel still has something to show)
+- First offline run revealed a deeper issue: every persona action on `/cart` and `/checkout` was timing out. Traced to the demo-app's `_app.jsx` CartProvider: two useEffects (read cart → write cart) race on every mount, and the write effect fires with the initial `[]` state *before* the read effect picks up the seeded value. So a hard `page.goto('/checkout')` clears any prior localStorage entry on mount and `/checkout` renders the empty-cart placeholder instead of the form
+- Refactored `engine/explorer.py` to **seed the cart on /products then client-side navigate** to the target via the Next.js `<Link href="/cart">` anchor. CartProvider stays mounted, the seeded item survives the route change. `/cart` and `/checkout` now render their forms during exploration
+- Verified the full pipeline runs end-to-end in offline mode: 4 pages × 3 personas explored, gap analyser annotates uncovered nodes, risk scorer ranks, memory layer disables gracefully, report compiles, generated tests directory populates. Findings produced (mostly favicon 404 console errors at this point; the form-validation-bypass detector has a separate false-negative issue noted below)
+
+### Decisions made
+- **Decision:** Use `truststore` instead of `pip-system-certs` or `python-certifi-win32` to handle the corp CA chain.
+  **Why:** `truststore` is the modern Python-3.10+ standard, supports both the `ssl` module and httpx/aiohttp transitively, and is lighter than the alternatives. Documented in CLAUDE.md §1 indirectly via requirements.
+  **Alternatives considered:** Setting `SSL_CERT_FILE` env var to a manually-exported corp CA bundle — rejected because the bundle path varies per machine and would need rotation.
+
+- **Decision:** Keep the OpenRouter config in `.env` (with the user's key) and gate it behind `LLM_OFFLINE=1` while Zscaler blocks the host.
+  **Why:** The OpenRouter wiring is correct and will start working immediately when the IT exception is granted (or when run from outside the corp network). Don't make the user re-paste the key. Re-flip `LLM_OFFLINE=0` and the scan goes live.
+  **Alternatives considered:** Strip the OpenRouter config and ask user to paste an `sk-ant-*` key for direct Anthropic — rejected: user explicitly wanted OpenRouter.
+
+- **Decision:** Cart-seed via client-side navigation (Next.js Link click) instead of `page.add_init_script` or direct localStorage injection.
+  **Why:** The CartProvider's write-effect-on-mount cannot be defeated from outside React without modifying the demo-app source. Click-the-link is the same trick a real user would do — minimal, no code changes to the demo-app.
+  **Alternatives considered:** (a) Patch the demo-app's `_app.jsx` to skip the initial write-effect — rejected: demo-app is owned by the user; we shouldn't modify it to make our test agent's life easier. (b) Run the explorer with a shared browser context across all personas/pages seeded once at scan start — rejected: bigger refactor for a future iteration.
+
+- **Decision:** Add canned mocks rather than mock the entire Anthropic SDK call.
+  **Why:** The crafted mocks per (persona, page) deliberately exercise the demo-app bugs. They give the dashboard / report meaningful content even with no LLM. The detector and the rest of the agent loop run unchanged. Mocking the SDK call would have produced more realistic API behaviour but worse test data.
+
+- **Decision:** Bump `SCAN_TIMEOUT_SECONDS` from 180 → 600.
+  **Why:** Each persona-page now does a ~2–3s cart seed + click navigation + 1–10 persona actions × (8s Playwright fill timeout + 500ms settle + form-validation check + screenshot on anomaly). With 12 (page, persona) combos that's 5–7 minutes. 180s was getting cut at /checkout malicious_user before any other page ran.
+  **Alternatives considered:** Make the explorer faster (reuse browser context across personas) — same as the cart-seed alternative above; deferred.
+
+### Blockers encountered (all environmental, not code defects)
+- **Blocker:** corp Zscaler proxy blocks `openrouter.ai` and `huggingface.co` at the URL filter, even with truststore-validated TLS. The Anthropic SDK gets the Zscaler "Security Exception" HTML page back from `POST /api/v1/messages` and reports it as `Connection error`.
+  **How resolved:** Not resolved at the code level — added `LLM_OFFLINE=1` mode so plumbing can be validated locally. User needs to either (a) file a ServiceNow request via `CS_Corporate Security → Unblock Specific URLs (Zscaler)` for `openrouter.ai`, or (b) point `ANTHROPIC_BASE_URL` at a Cognizant-internal AI gateway that bypasses Zscaler, or (c) use a directly-allowed endpoint (`api.anthropic.com` is reachable — sk-ant-* key needed).
+  **Time lost:** ~45 min identifying the block, debugging the wrong axis first (assumed TLS, was actually URL filter).
+  **See also:** BUGLOG BUG-005.
+
+- **Blocker:** PowerShell `Out-File` writes UTF-16 LE by default. The first uvicorn log I read was unreadable.
+  **How resolved:** Used `-Encoding utf8` explicitly. CLAUDE.md system reminder already warns about this; I missed it on first pass.
+  **Time lost:** ~5 min.
+
+- **Blocker:** demo-app `CartProvider` useEffect race clears localStorage on every mount, so `_seed_cart_state` via a separate page didn't survive the explorer's subsequent `page.goto('/checkout')`.
+  **How resolved:** Switched to client-side navigation via the Next.js Link anchor. See decisions above.
+  **Time lost:** ~25 min tracing the race.
+  **See also:** BUGLOG BUG-004.
+
+### What was learned
+- `truststore.inject_into_ssl()` is a near-magic single-line fix for corporate networks with a CA in the OS trust store. Should be a near-default for any Python tool that talks HTTPS on a Windows corp machine.
+- "Scan completed with 0 findings" is a worse failure mode than "Scan failed with error" — the user can't tell if it's working. The `state["error"]` field added in this session means future ops can render a diagnostic in the dashboard, e.g. "LLM unreachable: every persona action call failed; check ANTHROPIC_BASE_URL".
+- The form-validation-bypass detector (`engine/anomaly_detector.py::check_form_validation`) returns `None` when *any* error element is visible, but the demo-app's /checkout shows simultaneous errors for unrelated fields (CVV too short, expiry invalid, etc.). After a click with mixed-validity input, some `.error-message` elements appear → detector misses BUG-004 even when the form does accept the invalid card. Future improvement: scope error visibility to the specific field whose validation was being tested. Not fixed in this session.
+
+### Next session priorities
+1. **System-side: file a Zscaler unblock for `openrouter.ai`** (or pick alternative AI endpoint). Without this, the agent cannot exercise real LLM-driven persona behaviour.
+2. Once LLM is reachable, flip `.env` `LLM_OFFLINE=0` and re-verify the live flow surfaces more bug types than the offline mocks alone.
+3. Form-validation false-negative on /checkout (BUG-004 missed): scope error visibility to the field under test in `engine/anomaly_detector.py::check_form_validation`.
+4. Make the explorer share a single browser context across all personas/pages within a scan (massive speed win and removes the cart-seed-per-call cost).
+
+### Session end: 2026-05-18
+### Gate status: [PASSED — caveat] Plumbing end-to-end in offline mode. Live LLM blocked by corp network (BUGLOG BUG-005).
+

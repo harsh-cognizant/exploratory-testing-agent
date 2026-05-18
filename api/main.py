@@ -10,6 +10,18 @@ import sys
 import asyncio
 from pathlib import Path
 
+# Redirect Python's `ssl` module to the OS trust store BEFORE any module that
+# might open an HTTPS connection (anthropic, sentence-transformers, chromadb).
+# On corporate Windows machines this picks up the corp CA from the Windows
+# certificate store, which is what unblocks outbound HTTPS to OpenRouter /
+# Anthropic / HuggingFace. Soft-failing import keeps non-Windows / non-corp
+# environments unaffected.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

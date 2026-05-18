@@ -9,6 +9,7 @@ Created: 2026-05-14
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import chromadb
@@ -18,6 +19,23 @@ from sentence_transformers import SentenceTransformer
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def _is_model_cached(model_name: str) -> bool:
+    """Return True if the sentence-transformers model is already on disk.
+
+    Checks both HF Hub's cache layout (~/.cache/huggingface/hub/models--*)
+    and sentence-transformers' legacy cache. A True result means we can
+    safely flip HF_HUB_OFFLINE=1 and skip the network probe.
+    """
+    home = Path.home()
+    safe = model_name.replace("/", "_")
+    candidates = [
+        home / ".cache" / "huggingface" / "hub" / f"models--sentence-transformers--{safe}",
+        home / ".cache" / "huggingface" / "hub" / f"models--{safe}",
+        home / ".cache" / "torch" / "sentence_transformers" / f"sentence-transformers_{safe}",
+    ]
+    return any(p.is_dir() and any(p.iterdir()) for p in candidates)
 
 # Constants per CLAUDE.md §13 quick reference.
 MEMORY_SIMILARITY_THRESHOLD: float = 0.85
@@ -37,7 +55,13 @@ class AgentMemory:
     """
 
     def __init__(self) -> None:
-        """Initialize ChromaDB persistent client and sentence transformer model."""
+        """Initialize ChromaDB persistent client and sentence transformer model.
+
+        If the embedding model can't be loaded (typical cause: corporate TLS
+        proxy blocks the first-time HuggingFace download), the instance falls
+        back into a disabled state where every operation becomes a no-op. The
+        scan still completes; only the memory-driven risk adjustment is lost.
+        """
         chroma_path = os.getenv("CHROMA_PATH", "./chroma_store")
         # CRITICAL: use PersistentClient — NOT chromadb.Client()
         self.client = chromadb.PersistentClient(path=chroma_path)
@@ -45,12 +69,29 @@ class AgentMemory:
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
-        # Use this exact model — it's small, fast, and runs locally.
-        self.model = SentenceTransformer(EMBEDDING_MODEL)
-        logger.info(
-            "AgentMemory initialized: path=%s, collection=%s, model=%s",
-            chroma_path, COLLECTION_NAME, EMBEDDING_MODEL,
-        )
+
+        # Prefer offline mode when the model is already cached — avoids the
+        # 5-retry SSL storm against huggingface.co that the corp proxy blocks.
+        if not os.getenv("HF_HUB_OFFLINE") and _is_model_cached(EMBEDDING_MODEL):
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            logger.debug("HF model cached locally; enabled HF_HUB_OFFLINE")
+
+        self.model: Optional[SentenceTransformer] = None
+        self.disabled: bool = False
+        try:
+            self.model = SentenceTransformer(EMBEDDING_MODEL)
+            logger.info(
+                "AgentMemory initialized: path=%s, collection=%s, model=%s",
+                chroma_path, COLLECTION_NAME, EMBEDDING_MODEL,
+            )
+        except Exception as exc:
+            self.disabled = True
+            logger.warning(
+                "AgentMemory disabled — embedding model unavailable (%s). "
+                "Memory-driven risk adjustment will be skipped this run. "
+                "First-time setup needs reachable huggingface.co to download '%s'.",
+                exc.__class__.__name__, EMBEDDING_MODEL,
+            )
 
     def _embed(self, text: str) -> List[float]:
         """Encode text to a vector embedding.
@@ -63,7 +104,12 @@ class AgentMemory:
         """
         return self.model.encode(text).tolist()
 
-    def store_finding(self, finding: Dict[str, Any], run_id: str) -> None:
+    def store_finding(self, finding: Dict[str, Any], run_id: str) -> None:  # noqa: D401
+        if self.disabled or self.model is None:
+            return
+        self._store_finding_impl(finding, run_id)
+
+    def _store_finding_impl(self, finding: Dict[str, Any], run_id: str) -> None:
         """Store a finding as a vector embedding in ChromaDB.
 
         Args:
@@ -112,6 +158,8 @@ class AgentMemory:
         Returns:
             List of similar findings with similarity scores.
         """
+        if self.disabled or self.model is None:
+            return []
         try:
             embedding = self._embed(context)
             results = self.collection.query(

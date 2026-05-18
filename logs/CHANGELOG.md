@@ -9,6 +9,34 @@ MAJOR = breaking schema/API change · MINOR = new feature or layer · PATCH = fi
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-05-18 — Resilience + offline-mode hardening
+### Added
+- `engine/memory.py` `_is_model_cached()` — pre-emptively sets `HF_HUB_OFFLINE=1` when the sentence-transformers model is already on disk, avoiding the 5-retry SSL storm against huggingface.co when the corp proxy blocks it
+- `engine/memory.py` `AgentMemory.disabled` flag — `__init__` catches embedding-model load failures and downgrades to no-op for store/query so the scan still completes when HF is unreachable (BUGLOG BUG-001)
+- `engine/explorer.py` `_seed_cart_and_navigate()` — explorer now seeds the cart on /products and **client-side** navigates (via the Next.js `<Link>` anchor) to /cart and /checkout. Hard `page.goto` was racing the CartProvider's two useEffects and the cart was being cleared on every mount; client-side nav keeps CartProvider mounted so the seeded item survives (BUGLOG BUG-004)
+- `agent/offline_mocks.py` — canned (persona, page) action lists used when `LLM_OFFLINE=1`; each pair targets a specific demo-app bug from CLAUDE.md §10
+- `truststore` (requirements.txt) — redirects Python's `ssl` module to the Windows trust store on import so the corp CA chain validates and HTTPS to Anthropic/HF/OpenRouter clears the TLS handshake (BUGLOG BUG-002)
+- `api/main.py` calls `truststore.inject_into_ssl()` before any HTTPS-using module imports
+
+### Changed
+- `agent/gap_analyser.py`, `agent/personas.py`, `agent/test_generator.py` — `_get_client()` now supports `ANTHROPIC_AUTH_TOKEN` (Bearer auth) in addition to `ANTHROPIC_API_KEY` (x-api-key). Enables OpenRouter / proxy endpoints that expect `Authorization: Bearer …`
+- `agent/gap_analyser.py` `analyse_gaps()` — under `LLM_OFFLINE=1` returns a heuristic gap list (every uncovered node) without calling Claude
+- `agent/personas.py` `generate_persona_actions()` — under `LLM_OFFLINE=1` returns canned actions from `agent/offline_mocks.py` instead of calling Claude; live-path fallback no longer emits the bogus `{action_type:'click', target:'button'}` action (was causing noisy false positives on every page when the LLM was unreachable)
+- `agent/test_generator.py` `generate_test_for_finding()` — under `LLM_OFFLINE=1` builds a deterministic placeholder Pytest stub instead of calling Claude
+- `agent/brain.py` — `nodes_explored` now counts pages actually visited by the explorer (regardless of whether a finding was produced) rather than unique `node_id`s in `findings`. Old definition collapsed to 0 on no-bug runs and made the dashboard look stuck
+- `agent/brain.py` — adds `persona_call_attempts` / `persona_call_successes` counters; sets `state["error"]` with a diagnostic when every persona call fails so the LLM-unreachable case is no longer silent
+- `.env` — switched to OpenRouter config (`ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<openrouter key>`, `ANTHROPIC_MODEL=poolside/laguna-m.1:free`) per user instruction; added `LLM_OFFLINE=1` flag; bumped `SCAN_TIMEOUT_SECONDS` to 600 to cover all 4 pages × 3 personas
+
+### Fixed
+- BUGLOG BUG-001 — `engine/memory.py` no longer hard-crashes the scan when the corp proxy blocks huggingface.co
+- BUGLOG BUG-002 — Python httpx/requests now validate against the Windows trust store via `truststore`; no more `CERTIFICATE_VERIFY_FAILED` for any host whose CA is in the OS store
+- BUGLOG BUG-003 — `nodes_explored` accurately reflects exploration regardless of finding count
+- BUGLOG BUG-004 — `/cart` and `/checkout` form selectors render correctly during exploration
+
+### Notes
+- **System-restriction blockers remaining:** the corp Zscaler URL filter still blocks `openrouter.ai` and `huggingface.co` at the host level even with valid TLS — see BUGLOG BUG-005. Confirmed `api.anthropic.com` is reachable (HTTP 404 with no Zscaler block page). Until either an allowlist exception is granted (ServiceNow → CS_Corporate Security → "Unblock Specific URLs (Zscaler)") or a Cognizant-internal Anthropic-compatible gateway is configured, the agent runs with `LLM_OFFLINE=1` and emits canned persona actions only. All plumbing (crawler → graph → risk → exploration → anomaly detection → memory → report) is verified working end-to-end in offline mode.
+- Cold-start time for uvicorn now ~60–80s on first launch (truststore loading the Windows cert store + sentence-transformers model probe). Subsequent reloads with `HF_HUB_OFFLINE=1` auto-set are faster.
+
 ## [0.9.0] — 2026-05-15 — Phase 9 gate passed (Integration & Hardening)
 ### Added
 - `README.md` — comprehensive project documentation: architecture diagram, 5-layer overview, quick start guide, API endpoints table, demo app bug catalogue, persona descriptions, project structure

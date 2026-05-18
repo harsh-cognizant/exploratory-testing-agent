@@ -17,8 +17,19 @@ import anthropic
 from dotenv import load_dotenv
 
 from agent.gap_analyser import safe_parse_json
+from agent.offline_mocks import get_mock_actions
 
 load_dotenv()
+
+
+def _is_offline() -> bool:
+    """Return True when the operator wants LLM steps mocked.
+
+    Toggle: set LLM_OFFLINE=1 in .env. Useful when the corporate proxy
+    blocks the LLM endpoint (openrouter.ai, api.anthropic.com, etc.) and
+    the goal is to validate the rest of the pipeline.
+    """
+    return (os.getenv("LLM_OFFLINE") or "").strip().lower() in ("1", "true", "yes")
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +53,23 @@ PERSONA_PROMPT_FILES: Dict[str, str] = {
 
 
 def _get_client() -> anthropic.Anthropic:
-    """Construct an Anthropic client; fail fast if API key is missing.
+    """Construct an Anthropic-SDK-compatible client.
 
-    Returns:
-        Configured Anthropic client.
-
-    Raises:
-        RuntimeError: If ANTHROPIC_API_KEY is not set.
+    Supports both direct Anthropic (ANTHROPIC_API_KEY → x-api-key) and proxy /
+    OpenRouter (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL → Bearer auth).
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or api_key == "your_key_here":
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. See CLAUDE.md §1 hard constraints."
-        )
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
+    auth_token = (os.getenv("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip() or None
+
+    if auth_token:
+        return anthropic.Anthropic(auth_token=auth_token, base_url=base_url)
+    if api_key and api_key != "your_key_here":
+        return anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    raise RuntimeError(
+        "No Anthropic credentials set. Set ANTHROPIC_API_KEY or "
+        "ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL in .env."
+    )
 
 
 def _load_prompt_template(persona: str) -> str:
@@ -216,6 +229,15 @@ def generate_persona_actions(
         List of action dicts, each with: action_type, target, value, reason.
         Returns empty list on failure (never crashes).
     """
+    # Offline mode short-circuit — bypass the LLM entirely.
+    if _is_offline():
+        actions = get_mock_actions(persona, page_url)
+        logger.info(
+            "Persona '%s' [offline] returned %d mock actions for %s",
+            persona, len(actions), page_url,
+        )
+        return _filter_valid_actions(actions, persona, page_url)
+
     try:
         template = _load_prompt_template(persona)
     except (ValueError, FileNotFoundError) as exc:
@@ -290,9 +312,13 @@ def generate_persona_actions(
             # Do not return [] here, allow it to fall through or return fallback directly.
             break
 
-    # Fallback to mock actions if API fails due to rate-limiting
-    logger.warning("Persona '%s': API failed, using fallback mock actions for %s", persona, page_url)
-    fallback_actions = [
-        {"action_type": "click", "target": "button", "value": "", "reason": "Fallback exploration click"}
-    ]
-    return fallback_actions
+    # No fallback action — a generic `click button` selector can match anything
+    # on the page (or nothing), produces noisy false-positive findings on every
+    # node, and obscures the real failure mode (API unreachable or JSON parse
+    # failed). Return [] and let brain.py's `if not actions: continue` skip
+    # the page-persona pair while leaving the page counted as visited.
+    logger.warning(
+        "Persona '%s': no valid actions returned for %s; skipping this pair",
+        persona, page_url,
+    )
+    return []

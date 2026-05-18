@@ -35,6 +35,79 @@ ACTION_SETTLE_WAIT_MS: int = 500
 SCREENSHOT_DIR: str = os.getenv("SCREENSHOTS_DIR", "./screenshots")
 BROWSER_CHANNEL: str = "chrome"
 
+# Demo-app pages that gate their form rendering on a non-empty cart. The
+# explorer launches a fresh BrowserContext (no shared cookies / localStorage),
+# so we have to re-seed the cart here using the same UI-driven approach the
+# crawler uses (engine/crawler.py:_seed_cart_state). Without this, /cart and
+# /checkout render the empty-cart placeholder and every persona fill times
+# out against selectors that don't exist.
+STATE_DEPENDENT_PATHS: set = {"/cart", "/checkout"}
+SEED_ADD_TO_CART_SELECTOR: str = "[data-testid='add-to-cart-btn-1']"
+
+
+async def _seed_cart_and_navigate(page: Page, app_url: str, target_path: str) -> bool:
+    """Seed the cart on /products then navigate client-side to target_path.
+
+    Why client-side navigation: the demo-app's CartProvider has two competing
+    useEffects (read cart from localStorage, write cart to localStorage on
+    every cartItems change). On a hard navigation (page.goto), the write
+    effect fires with the initial `[]` state — overwriting any localStorage
+    entry — *before* the read effect can pick up the seeded cart. The result
+    is that /cart and /checkout always render the empty-cart placeholder
+    when reached via page.goto, so persona fills time out against form
+    selectors that aren't in the DOM.
+
+    Client-side nav via the Next.js `<Link>` anchor in the nav header keeps
+    the CartProvider mounted — its state survives the route change — and the
+    seeded item stays in `cartItems`. /cart and /checkout then render their
+    full form surface and the persona actions can run normally.
+
+    Args:
+        page: The page to operate on (state listeners already attached).
+        app_url: Application base URL, e.g. http://localhost:3001.
+        target_path: Final path to land on, e.g. /cart or /checkout.
+
+    Returns:
+        True if seeded and navigated successfully, False on any failure
+        (caller falls back to a hard navigation as last resort).
+    """
+    try:
+        await page.goto(
+            urljoin(app_url, "/products"),
+            timeout=PAGE_LOAD_TIMEOUT_MS,
+            wait_until="domcontentloaded",
+        )
+        try:
+            await page.wait_for_load_state("networkidle", timeout=PAGE_LOAD_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            pass
+        await page.wait_for_selector(SEED_ADD_TO_CART_SELECTOR, timeout=PAGE_LOAD_TIMEOUT_MS)
+        await page.click(SEED_ADD_TO_CART_SELECTOR)
+        await page.wait_for_timeout(ACTION_SETTLE_WAIT_MS)
+
+        # Click the in-nav Next.js Link. Selector matches the <a href="/X">
+        # anchors emitted by _app.jsx's Navigation. Stays in client-side
+        # routing so CartProvider does not remount.
+        nav_selector = f"a[href='{target_path}']"
+        await page.click(nav_selector, timeout=PAGE_LOAD_TIMEOUT_MS)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=PAGE_LOAD_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            pass
+        # Extra settle so React commits the new route's first render. /cart
+        # and /checkout gate form rendering on `cartItems.length > 0` so the
+        # first render after navigation still shows the empty branch until
+        # the next tick.
+        await page.wait_for_timeout(ACTION_SETTLE_WAIT_MS)
+        logger.debug("Explorer seeded cart + client-side navigated to %s", target_path)
+        return True
+    except PlaywrightTimeoutError:
+        logger.warning("Cart-seed/navigate timed out for %s", target_path)
+        return False
+    except Exception as exc:
+        logger.warning("Cart-seed/navigate error for %s: %s", target_path, exc)
+        return False
+
 
 async def execute_action(page: Page, action: Dict[str, Any]) -> None:
     """Execute a single persona action on the page.
@@ -142,8 +215,20 @@ async def explore_node(
         page.on("response", collector.on_response)
 
         try:
-            # Navigate to the target page.
-            await page.goto(target_url, timeout=PAGE_LOAD_TIMEOUT_MS)
+            # For state-dependent routes (/cart, /checkout), seed the cart
+            # on /products then *client-side* navigate to the target. The
+            # CartProvider stays mounted across the Next.js Link click, so
+            # the seeded item survives the route change and the target's
+            # form actually renders. Falls back to a hard navigation if the
+            # nav Link is unavailable for any reason.
+            seeded = False
+            if page_url in STATE_DEPENDENT_PATHS:
+                seeded = await _seed_cart_and_navigate(page, app_url, page_url)
+
+            if not seeded:
+                # Either not a state-dependent route, or seed failed: do a
+                # plain navigation to the target.
+                await page.goto(target_url, timeout=PAGE_LOAD_TIMEOUT_MS)
             try:
                 await page.wait_for_load_state(
                     "networkidle", timeout=PAGE_LOAD_TIMEOUT_MS

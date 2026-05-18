@@ -61,18 +61,30 @@ def safe_parse_json(text: str) -> Optional[Union[List, Dict]]:
 
 
 def _get_client() -> anthropic.Anthropic:
-    """Construct an Anthropic client; fail fast with a clear message if the
-    API key is unset (per CLAUDE.md §1 hard constraint).
+    """Construct an Anthropic-SDK-compatible client.
+
+    Supports two auth modes:
+      * Anthropic direct: ANTHROPIC_API_KEY (sent as `x-api-key` header).
+      * OpenRouter / proxy: ANTHROPIC_AUTH_TOKEN (sent as `Authorization: Bearer`).
+        Set ANTHROPIC_BASE_URL alongside to point at the proxy
+        (e.g. https://openrouter.ai/api for OpenRouter's Anthropic-compatible
+        endpoint at /v1/messages).
+
+    Raises:
+        RuntimeError: if neither credential is configured.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or api_key == "your_key_here":
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. See CLAUDE.md §1 hard constraints — "
-            "either create a .env file with the key or set the user env var "
-            "via PowerShell."
-        )
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
+    auth_token = (os.getenv("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip() or None
+
+    if auth_token:
+        return anthropic.Anthropic(auth_token=auth_token, base_url=base_url)
+    if api_key and api_key != "your_key_here":
+        return anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    raise RuntimeError(
+        "No Anthropic credentials set. Set ANTHROPIC_API_KEY (direct) or "
+        "ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL (proxy / OpenRouter) in .env."
+    )
 
 
 def _load_prompt_template() -> str:
@@ -166,6 +178,11 @@ def _analyse_batch(
     return []
 
 
+def _is_offline() -> bool:
+    """Return True when LLM_OFFLINE=1 in env (see agent/personas.py for context)."""
+    return (os.getenv("LLM_OFFLINE") or "").strip().lower() in ("1", "true", "yes")
+
+
 def analyse_gaps(
     graph: nx.DiGraph,
     max_gaps_total: int = DEFAULT_MAX_GAPS_PER_BATCH * 4,
@@ -201,6 +218,25 @@ def analyse_gaps(
     if not uncovered:
         logger.info("gap_analyser: no uncovered nodes; skipping Claude call")
         return []
+
+    # Offline mode: mark every uncovered node as a heuristic gap. No LLM call.
+    if _is_offline():
+        gaps: List[Dict[str, Any]] = []
+        for node in uncovered[:max_gaps_total]:
+            reason = (
+                f"Uncovered {node['type']} surface at {node['url']} "
+                f"({node['label']}) — heuristic gap (offline mode)."
+            )
+            gaps.append({
+                "node_id": node["id"],
+                "page": node["url"],
+                "gap_reason": reason,
+                "risk_factors": [],
+            })
+            if node["id"] in graph.nodes:
+                graph.nodes[node["id"]]["gap_reason"] = reason
+        logger.info("gap_analyser [offline]: returning %d heuristic gaps", len(gaps))
+        return gaps
 
     client = _get_client()
     template = _load_prompt_template()

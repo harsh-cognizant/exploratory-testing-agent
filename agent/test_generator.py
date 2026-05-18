@@ -38,21 +38,23 @@ from playwright.sync_api import Page
 
 
 def _get_client() -> anthropic.Anthropic:
-    """Construct Anthropic client; fail fast if API key missing.
+    """Construct an Anthropic-SDK-compatible client.
 
-    Returns:
-        Configured Anthropic client.
-
-    Raises:
-        RuntimeError: If ANTHROPIC_API_KEY is not set.
+    Supports both direct Anthropic (ANTHROPIC_API_KEY → x-api-key) and proxy /
+    OpenRouter (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL → Bearer auth).
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or api_key == "your_key_here":
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. See CLAUDE.md §1."
-        )
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
-    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
+    auth_token = (os.getenv("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip() or None
+
+    if auth_token:
+        return anthropic.Anthropic(auth_token=auth_token, base_url=base_url)
+    if api_key and api_key != "your_key_here":
+        return anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    raise RuntimeError(
+        "No Anthropic credentials set. Set ANTHROPIC_API_KEY or "
+        "ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL in .env."
+    )
 
 
 def _load_prompt_template() -> str:
@@ -120,6 +122,46 @@ def _extract_function_code(raw_text: str) -> str:
     return "\n".join(filtered).strip()
 
 
+def _is_offline() -> bool:
+    """Return True when LLM_OFFLINE=1 in env (see agent/personas.py for context)."""
+    return (os.getenv("LLM_OFFLINE") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _build_offline_test(finding: Dict[str, Any], severity: str) -> Dict[str, Any]:
+    """Build a deterministic placeholder Pytest function for offline mode.
+
+    The generated test is a real, syntactically valid stub that documents
+    the finding and asserts a TODO. It's not LLM-quality but it lets the
+    test-generation slot in the report render correctly.
+    """
+    page_slug = (finding.get("page") or "/").strip("/").replace("/", "_") or "home"
+    safe_id = finding["id"].replace("-", "_")
+    func_name = f"test_{page_slug}_{safe_id}"
+    page_url = finding.get("page", "/")
+    anomaly = (finding.get("anomaly") or "").replace('"""', "'''")
+    steps_lines = "\n".join(
+        f"    # {s}" for s in (finding.get("reproduction_steps") or [])
+    ) or "    # (no reproduction steps recorded)"
+    code = (
+        f"def {func_name}(page):\n"
+        f"    \"\"\"Regression for finding {finding['id']} on {page_url}.\n\n"
+        f"    Anomaly: {anomaly}\n"
+        f"    Severity: {severity}\n"
+        f"    \"\"\"\n"
+        f"{steps_lines}\n"
+        f"    page.goto(\"http://localhost:3001{page_url}\")\n"
+        f"    # TODO: encode the precise assertion that catches this regression.\n"
+        f"    assert False, \"Replace with real assertion once LLM backend is reachable\"\n"
+    )
+    return {
+        "finding_id": finding["id"],
+        "test_function_name": func_name,
+        "test_code": code,
+        "severity": severity,
+        "page": page_url,
+    }
+
+
 def generate_test_for_finding(
     finding: Dict[str, Any],
     app_url: str = BASE_URL,
@@ -142,6 +184,9 @@ def generate_test_for_finding(
     if severity not in ("high", "critical"):
         logger.debug("Skipping test gen for %s (severity=%s)", finding.get("id"), severity)
         return None
+
+    if _is_offline():
+        return _build_offline_test(finding, severity)
 
     try:
         template = _load_prompt_template()

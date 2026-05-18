@@ -226,3 +226,66 @@ Append-only chronological record of every terminal command run.
 **Exit code:** —
 **Output summary:** Successfully stopped.
 **Result:** SUCCESS
+
+---
+
+### 2026-05-18 06:50 — Pull updated `dev` from origin (commit 21d160f)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `git pull --ff-only origin dev`
+**Exit code:** 0
+**Output summary:** Fast-forward 59292e6..21d160f. 57 files changed, 5979 insertions, 97 deletions. New dashboard scaffold, persona engine, anomaly detector, explorer, memory, report builder.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-18 06:55 — First end-to-end scan attempt (revealed missing key + HF SSL issue)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `curl -X POST http://127.0.0.1:8000/scan -H "Content-Type: application/json" -d '{"app_url":"http://localhost:3001","personas":["confused_user"]}'`
+**Exit code:** 0
+**Output summary:** `{"scan_id":"scan_20260518_065452","status":"started","estimated_duration_seconds":120}`. Scan completed with status=completed, nodes_explored=0, findings=0. Decoded uvicorn log showed ANTHROPIC_API_KEY missing and SSL: CERTIFICATE_VERIFY_FAILED against huggingface.co.
+**Result:** PARTIAL — scan plumbing works, but agent does no work because LLM unreachable
+
+---
+
+### 2026-05-18 07:40 — Install truststore to fix corp TLS chain
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `.\venv\Scripts\python.exe -m pip install -q truststore`
+**Exit code:** 0
+**Output summary:** Installed truststore 0.10.x silently.
+**Result:** SUCCESS
+
+---
+
+### 2026-05-18 07:50 — Verify TLS handshake works after truststore inject
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `.\venv\Scripts\python.exe -c "import truststore; truststore.inject_into_ssl(); import httpx; r = httpx.get('https://openrouter.ai/api/v1/models', timeout=15); print('Status:', r.status_code)"`
+**Exit code:** 0
+**Output summary:** Status: 403 (TLS OK, but URL filter returns block page — BUGLOG BUG-005)
+**Result:** PARTIAL — TLS works, URL filter blocks (separate issue)
+
+---
+
+### 2026-05-18 08:00 — Confirm api.anthropic.com is reachable (not blocked by Zscaler)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `.\venv\Scripts\python.exe -c "import truststore; truststore.inject_into_ssl(); import httpx; print(httpx.get('https://api.anthropic.com/', timeout=10).status_code)"`
+**Exit code:** 0
+**Output summary:** 404 — real Anthropic 404 (host reachable). Compared to openrouter.ai which returned 403 with a Cognizant Security Exception HTML block page.
+**Result:** SUCCESS — confirmed api.anthropic.com is allowed; only openrouter.ai + huggingface.co are blocked
+
+---
+
+### 2026-05-18 11:25 — End-to-end scan with LLM_OFFLINE=1 (canned mocks)
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `curl -X POST http://127.0.0.1:8000/scan ...` (full 3-persona scan, `LLM_OFFLINE=1` in .env)
+**Exit code:** —
+**Output summary:** scan_id=scan_20260518_112541. Completed in ~7 min. nodes_explored=1/16, findings=2 (both medium console errors on /checkout). Investigation showed every `/cart` and `/checkout` action was timing out (BUGLOG BUG-004 — cart wasn't seeded properly because of CartProvider useEffect race).
+**Result:** PARTIAL — offline pipeline works, but cart-seed race meant /cart and /checkout forms never rendered
+
+---
+
+### 2026-05-18 12:20 — End-to-end scan with cart-seed via Next.js Link navigation
+**Directory:** `c:\Users\2437925\OneDrive - Cognizant\Desktop\Hackathon\Exploratory_Testing_Agent`
+**Command:** `curl -X POST http://127.0.0.1:8000/scan ...` (3-persona scan, LLM_OFFLINE=1, post BUG-004 fix)
+**Exit code:** —
+**Output summary:** scan_id=scan_20260518_123818. Completed. 4 pages × 3 personas explored. nodes_explored=4/16, findings=11 (mostly favicon 404 console errors). Cart-seed via Link navigation working; /cart and /checkout forms now render during exploration.
+**Result:** SUCCESS — full pipeline traced end-to-end
