@@ -4,26 +4,32 @@ Purpose: Central orchestrator. Owns SCAN_STATE (the module-level dict keyed by
          scan_id) and runs the agent loop as a background asyncio task per
          CLAUDE.md §4.16.
 
-         Phase 3 implements steps 1-8 (init → crawl → graph → gap analysis →
-         risk scoring → queue assembly). Steps 9-13 (exploration, memory,
-         test generation, report compilation) are stubbed for later phases —
-         current scans complete cleanly without them.
+         Full flow: init → crawl → graph → gap analysis → risk scoring →
+         queue assembly → exploration (per-node per-persona) → memory store →
+         test generation → report compilation.
 Created: 2026-05-14
+Updated: 2026-05-14 (Phase 4-6 — full orchestration flow)
 """
 
 import asyncio
 import logging
 import os
 import time
-from datetime import datetime
-from typing import Any, Dict, Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 from agent.gap_analyser import analyse_gaps
+from agent.personas import generate_persona_actions
+from agent.test_generator import generate_tests_for_findings
 from api.models import ScanRequest, ScanStatus
 from engine.crawler import crawl
+from engine.explorer import explore_node
 from engine.graph_builder import build_coverage_graph
+from engine.memory import AgentMemory
+from engine.report_builder import compile_report
 from engine.risk_scorer import build_queue, score_graph
 
 load_dotenv()
@@ -32,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_SCAN_TIMEOUT_SECONDS: int = 180
+DEFAULT_PERSONAS: List[str] = ["confused_user", "power_user", "malicious_user"]
 
 # Module-level scan state. Keyed by scan_id. Each entry tracks progress so
 # GET /scan/{id}/status and GET /graph can read from a single source of truth.
@@ -40,10 +47,25 @@ DEFAULT_SCAN_TIMEOUT_SECONDS: int = 180
 # snapshot at the moment of access.
 SCAN_STATE: Dict[str, Dict[str, Any]] = {}
 
+# Singleton AgentMemory — lazily initialized on first use.
+_memory: Optional[AgentMemory] = None
+
+
+def _get_memory() -> AgentMemory:
+    """Return the singleton AgentMemory instance, initializing on first call.
+
+    Returns:
+        AgentMemory instance backed by ChromaDB.
+    """
+    global _memory
+    if _memory is None:
+        _memory = AgentMemory()
+    return _memory
+
 
 def _new_scan_id() -> str:
     """Return a new scan_id of the form `scan_YYYYMMDD_HHMMSS`."""
-    return f"scan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    return f"scan_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
 
 def _init_scan(scan_id: str, request: ScanRequest) -> None:
@@ -62,6 +84,7 @@ def _init_scan(scan_id: str, request: ScanRequest) -> None:
         "findings": [],
         "gaps": [],
         "queue": [],
+        "generated_tests": [],
         "report": None,
         "started_at": time.monotonic(),
         "error": None,
@@ -84,12 +107,20 @@ def _read_timeout_seconds() -> int:
 
 
 async def _run_scan(scan_id: str, request: ScanRequest) -> None:
-    """Execute the Phase 3 subset of the orchestration flow.
+    """Execute the full orchestration flow (steps 1-13).
 
-    Per CLAUDE.md §4.16, the full flow has 13 steps. Phase 3 covers steps
-    1-8 (init, crawl, graph build, gap analysis, risk scoring, queue
-    assembly). Exploration, memory query, test generation, and report
-    compilation are placeholders until later phases land.
+    Per CLAUDE.md §4.16:
+    Steps 1-3: Init (already done by start_scan)
+    Step 4: Crawl the application
+    Step 5: Build the coverage graph
+    Step 6: Gap analysis via Claude
+    Step 7: Risk scoring
+    Step 8: Assemble ranked queue
+    Step 9: Exploration loop (per-node, per-persona)
+    Step 10: Memory query and store
+    Step 11: Test generation
+    Step 12: Report compilation
+    Step 13: Mark complete
 
     Args:
         scan_id: The scan identifier returned by POST /scan.
@@ -105,45 +136,63 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
         return (time.monotonic() - started) > timeout_s
 
     try:
-        # Step 4: crawl.
+        # ── Step 4: Crawl ────────────────────────────────────────────
         state["current_node"] = "crawler"
-        state["progress_percent"] = 10
+        state["progress_percent"] = 5
         logger.info("Scan %s: crawling %s", scan_id, request.app_url)
         elements = await crawl(request.app_url, max_pages=request.max_nodes)
         logger.info("Scan %s: crawler returned %d elements", scan_id, len(elements))
 
-        # Step 5: build graph.
+        # ── Step 5: Build graph ──────────────────────────────────────
         state["current_node"] = "graph_builder"
-        state["progress_percent"] = 40
+        state["progress_percent"] = 15
         graph = build_coverage_graph(elements, request.existing_tests_path)
         state["graph"] = graph
         state["nodes_total"] = graph.number_of_nodes()
 
-        # Step 6: gap analysis (Claude). Skipped if API key absent — the scan
-        # still finishes successfully with no gap_reason annotations.
+        # ── Step 6: Gap analysis (Claude) ────────────────────────────
         if _elapsed_over_budget():
             logger.warning("Scan %s: timeout before gap analysis; skipping", scan_id)
         else:
             state["current_node"] = "gap_analyser"
-            state["progress_percent"] = 70
+            state["progress_percent"] = 25
             try:
                 gaps = analyse_gaps(graph)
                 state["gaps"] = gaps
                 logger.info("Scan %s: gap_analyser found %d gaps", scan_id, len(gaps))
             except RuntimeError as exc:
-                # Missing ANTHROPIC_API_KEY — continue without gaps but record the cause.
                 logger.warning("Scan %s: skipping gap analysis (%s)", scan_id, exc)
                 state["gaps"] = []
                 state["error"] = str(exc)
 
-        # Step 7: risk scoring. The formula is deterministic and CSV-driven —
-        # no Claude call here, so the timeout check is a courtesy only.
+        # ── Step 7: Risk scoring ─────────────────────────────────────
         if _elapsed_over_budget():
             logger.warning("Scan %s: timeout before risk scoring; skipping", scan_id)
         else:
             state["current_node"] = "risk_scorer"
-            state["progress_percent"] = 85
-            score_graph(graph)
+            state["progress_percent"] = 35
+
+            # Query memory for adjustments (Phase 5 integration).
+            memory_adjustments: Dict[str, float] = {}
+            try:
+                memory = _get_memory()
+                for node_id, attrs in graph.nodes(data=True):
+                    url = attrs.get("url", "")
+                    context = f"{url} {attrs.get('label', '')}"
+                    adj = memory.get_memory_adjustment(node_id, context)
+                    if adj != 0.0:
+                        memory_adjustments[node_id] = adj
+                        # Set has_memory flag on graph node.
+                        attrs["has_memory"] = True
+                logger.info(
+                    "Scan %s: memory provided %d adjustments",
+                    scan_id, len(memory_adjustments),
+                )
+            except Exception as exc:
+                logger.warning("Scan %s: memory query failed (%s); scoring without", scan_id, exc)
+
+            score_graph(graph, memory_adjustments=memory_adjustments)
+
             # Step 8: assemble the ranked queue snapshot for /queue consumers.
             queue_items = build_queue(graph)
             state["queue"] = [item.model_dump() for item in queue_items]
@@ -155,7 +204,152 @@ async def _run_scan(scan_id: str, request: ScanRequest) -> None:
                 queue_items[0].node_id if queue_items else "—",
             )
 
-        # Phase 3 stops here. Steps 9-13 will fill in across Phases 4-6.
+        # ── Step 9: Exploration loop ─────────────────────────────────
+        personas = request.personas or DEFAULT_PERSONAS
+        all_findings: List[Dict[str, Any]] = []
+
+        if _elapsed_over_budget():
+            logger.warning("Scan %s: timeout before exploration; skipping", scan_id)
+        else:
+            state["current_node"] = "explorer"
+            state["progress_percent"] = 40
+
+            # Build the exploration queue from the risk-ranked queue.
+            # Only explore page-type nodes (buttons/inputs are explored
+            # as part of their parent page's action set).
+            explore_queue: List[Dict[str, Any]] = []
+            for node_id, attrs in graph.nodes(data=True):
+                element_type = attrs.get("element_type", "")
+                if element_type == "page":
+                    explore_queue.append({"node_id": node_id, "attrs": attrs})
+
+            # Sort by risk_score descending (explore highest-risk first).
+            explore_queue.sort(
+                key=lambda x: float(x["attrs"].get("risk_score", 0)),
+                reverse=True,
+            )
+
+            total_explore = len(explore_queue) * len(personas)
+            explored_count = 0
+
+            for page_item in explore_queue:
+                if _elapsed_over_budget():
+                    logger.warning("Scan %s: timeout during exploration; stopping early", scan_id)
+                    break
+
+                node_id = page_item["node_id"]
+                node_attrs = page_item["attrs"]
+                page_url = node_attrs.get("url", "/")
+
+                for persona in personas:
+                    if _elapsed_over_budget():
+                        break
+
+                    state["current_node"] = node_id
+                    state["current_persona"] = persona
+                    explored_count += 1
+                    progress = 40 + int((explored_count / max(total_explore, 1)) * 35)
+                    state["progress_percent"] = min(progress, 75)
+
+                    logger.info(
+                        "Scan %s: exploring %s with %s (%d/%d)",
+                        scan_id, page_url, persona, explored_count, total_explore,
+                    )
+
+                    # Generate persona-specific actions via Claude.
+                    try:
+                        actions = generate_persona_actions(
+                            persona=persona,
+                            page_url=f"{request.app_url}{page_url}",
+                            graph=graph,
+                            node_id=node_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Scan %s: persona generation failed for %s/%s: %s",
+                            scan_id, persona, page_url, exc,
+                        )
+                        actions = []
+
+                    if not actions:
+                        continue
+
+                    # Run Playwright exploration with the action list.
+                    try:
+                        findings = await explore_node(
+                            node_id=node_id,
+                            node_attrs=node_attrs,
+                            persona_actions=actions,
+                            app_url=request.app_url,
+                            persona=persona,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Scan %s: exploration failed for %s/%s: %s",
+                            scan_id, persona, page_url, exc,
+                        )
+                        findings = []
+
+                    all_findings.extend(findings)
+                    state["findings"] = all_findings
+                    state["findings_so_far"] = len(all_findings)
+                    state["nodes_explored"] = len(set(
+                        f.get("node_id") for f in all_findings
+                    ))
+
+            logger.info(
+                "Scan %s: exploration complete — %d findings from %d node-persona combos",
+                scan_id, len(all_findings), explored_count,
+            )
+
+        # ── Step 10: Memory store ────────────────────────────────────
+        state["current_node"] = "memory"
+        state["current_persona"] = None
+        state["progress_percent"] = 80
+
+        try:
+            memory = _get_memory()
+            for finding in all_findings:
+                memory.store_finding(finding, run_id=scan_id)
+            logger.info(
+                "Scan %s: stored %d findings in memory", scan_id, len(all_findings),
+            )
+        except Exception as exc:
+            logger.warning("Scan %s: memory store failed (%s)", scan_id, exc)
+
+        # ── Step 11: Test generation ─────────────────────────────────
+        if _elapsed_over_budget():
+            logger.warning("Scan %s: timeout before test generation; skipping", scan_id)
+        else:
+            state["current_node"] = "test_generator"
+            state["progress_percent"] = 85
+
+            try:
+                generated = generate_tests_for_findings(
+                    all_findings, app_url=request.app_url,
+                )
+                state["generated_tests"] = generated
+                logger.info(
+                    "Scan %s: generated %d tests", scan_id, len(generated),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Scan %s: test generation failed (%s)", scan_id, exc,
+                )
+                state["generated_tests"] = []
+
+        # ── Step 12: Report compilation ──────────────────────────────
+        state["current_node"] = "report_builder"
+        state["progress_percent"] = 95
+
+        try:
+            report = compile_report(state)
+            state["report"] = report
+            logger.info("Scan %s: report compiled", scan_id)
+        except Exception as exc:
+            logger.warning("Scan %s: report compilation failed (%s)", scan_id, exc)
+
+        # ── Step 13: Mark complete ───────────────────────────────────
         state["progress_percent"] = 100
         state["current_node"] = None
         state["current_persona"] = None

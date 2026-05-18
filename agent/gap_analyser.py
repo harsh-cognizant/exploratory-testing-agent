@@ -22,7 +22,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Constants per CLAUDE.md §1 hard constraints and §13 quick reference.
-CLAUDE_MODEL: str = "claude-sonnet-4-6"
+CLAUDE_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_GAP_ANALYSIS: int = 2000
 MAX_NODES_PER_CALL: int = 30
 DEFAULT_MAX_GAPS_PER_BATCH: int = 12
@@ -71,7 +71,8 @@ def _get_client() -> anthropic.Anthropic:
             "either create a .env file with the key or set the user env var "
             "via PowerShell."
         )
-    return anthropic.Anthropic(api_key=api_key)
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    return anthropic.Anthropic(api_key=api_key, base_url=base_url) if base_url else anthropic.Anthropic(api_key=api_key)
 
 
 def _load_prompt_template() -> str:

@@ -142,6 +142,10 @@ class ScanStatusResponse(BaseModel):
     findings_so_far: int
     current_node: Optional[str] = None
     current_persona: Optional[str] = None
+    # Coverage stats — computed from the graph when available.
+    covered_nodes: int = 0
+    gap_nodes: int = 0
+    coverage_percent: float = 0.0
 
 
 class MemoryRun(BaseModel):

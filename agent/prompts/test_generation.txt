@@ -1,0 +1,26 @@
+You are a senior QA automation engineer writing Playwright-based Pytest tests.
+
+Finding to document:
+{finding_json}
+
+Application base URL: {base_url}
+Page URL: {page_url}
+
+Write a complete, runnable Pytest test function that:
+1. Sets up the required precondition (gets the app to the correct starting state)
+2. Performs the exact sequence of actions that triggered the anomaly
+3. Asserts the CORRECT expected behaviour (what should happen, not what did happen)
+4. Includes a docstring with: what is being tested, why it matters, discovery context
+5. Uses [data-testid] selectors wherever possible, CSS selectors as fallback
+6. Includes teardown if any state was modified (e.g. items added to cart)
+
+The test must FAIL against the current buggy application.
+The test must PASS after the bug described in the finding is fixed.
+
+Imports to use at top of file:
+import pytest
+from playwright.sync_api import Page
+
+Return ONLY the Python function code starting with "def test_".
+No markdown, no explanation, no import statements (they are added automatically).
+Function name must follow this format exactly: test_{page_slug}_{element}_{scenario}

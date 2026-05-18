@@ -6,12 +6,17 @@ Purpose: FastAPI application entry point. Mounts every route module, configures
 Created: 2026-05-13
 """
 
+import sys
+import asyncio
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 load_dotenv()
 
